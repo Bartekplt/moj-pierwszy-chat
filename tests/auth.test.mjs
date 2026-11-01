@@ -111,25 +111,45 @@ test("ochrona warsztatowego czatu", async (t) => {
     process.env.NODE_ENV = "production";
     assert.equal((await login(loginRequest())).status, 503);
     process.env.VERCEL = "1";
-    process.env.VERCEL_URL = "workshop.vercel.app";
+    process.env.VERCEL_ENV = "production";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "workshop.vercel.app";
+    process.env.VERCEL_URL = "workshop-protected-deployment.vercel.app";
     globalThis.fetch = async () => new Response(null, { status: 404 });
     assert.equal((await login(loginRequest())).status, 503);
     globalThis.fetch = async () => { throw new Error("Firewall unavailable"); };
     assert.equal((await login(loginRequest())).status, 503);
   });
 
-  await t.test("aktywny Firewall dopuszcza sesję z Secure, blokada nie tworzy sesji", async () => {
+  await t.test("produkcja sprawdza Firewall przez publiczną domenę; blokada nie tworzy sesji", async () => {
+    let firewallCalls = 0;
     globalThis.fetch = async (url) => {
+      firewallCalls += 1;
       assert.match(String(url), /^https:\/\/workshop\.vercel\.app\//);
       return new Response(null, { status: 204 });
     };
     const allowed = await login(loginRequest(password, { Host: "localhost", "x-forwarded-host": "attacker.example" }));
     assert.equal(allowed.status, 204);
+    assert.equal(firewallCalls, 1);
     assert.match(allowed.headers.get("set-cookie"), /; Secure/);
     globalThis.fetch = async () => new Response(null, { status: 429 });
     const limited = await login(loginRequest());
     assert.equal(limited.status, 429);
     assert.equal(limited.headers.get("set-cookie"), null);
+  });
+
+  await t.test("brak domeny produkcyjnej nie powoduje obejścia ograniczenia", async () => {
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "";
+    assert.equal((await login(loginRequest())).status, 503);
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "workshop.vercel.app";
+  });
+
+  await t.test("preview nie przełącza się na produkcję, gdy techniczny adres wymaga logowania", async () => {
+    process.env.VERCEL_ENV = "preview";
+    globalThis.fetch = async (url) => {
+      assert.match(String(url), /^https:\/\/workshop-protected-deployment\.vercel\.app\//);
+      return new Response(null, { status: 302 });
+    };
+    assert.equal((await login(loginRequest())).status, 503);
     process.env.NODE_ENV = "test";
     process.env.VERCEL = "";
   });

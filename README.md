@@ -12,7 +12,7 @@ Przed dodaniem zdalnego adresu sprawdź właściciela repozytorium; nie wysyłaj
 Commit powinien mieć Twoją skonfigurowaną nazwę i adres autora z GitHub (może być adresem `noreply` z ustawień konta). Nie potrzebujesz podawać tokenu ani hasła w rozmowie.
 
 Po zapisaniu kodu we własnym repozytorium wybierz je w Vercel → Add New → Project → Import Git Repository.
-Framework: Next.js; Root Directory: `./`; Node.js: `24.x`. Włącz automatyczne udostępnianie systemowych zmiennych Vercel — limiter korzysta z `VERCEL` i `VERCEL_URL`.
+Framework: Next.js; Root Directory: `./`; Node.js: `24.x`. Włącz automatyczne udostępnianie systemowych zmiennych Vercel — limiter korzysta z `VERCEL`, `VERCEL_ENV` i `VERCEL_PROJECT_PRODUCTION_URL` (w preview z `VERCEL_URL`). Są dostarczane przez platformę; nie dodawaj ich ręcznie jako sekretów.
 W panelu zmiennych projektu ustaw dla Production (oraz Preview, jeżeli go używasz) wyłącznie własne wartości:
 
 - `OPENROUTER_API_KEY`
@@ -70,7 +70,7 @@ Przed udostępnieniem aplikacji skonfiguruj w panelu projektu:
 5. Ustaw cztery zmienne z `.env.example` jako sekrety projektu. Dla hostingu wygeneruj osobny `SESSION_SECRET`.
 
 Limiter Vercel działa per IP i region, współdzieląc licznik między instancjami w regionie; nie jest jednym globalnym licznikiem wszystkich regionów.
-Brak reguły, błąd lub niedostępność Firewalla zwraca `503` i blokuje logowanie. `VERCEL_URL` jest zaufanym hostem usługi, a `x-real-ip` pochodzi z infrastruktury Vercel.
+Brak reguły, błąd lub niedostępność Firewalla zwraca `503` i blokuje logowanie. W produkcji zaufanym hostem usługi jest `VERCEL_PROJECT_PRODUCTION_URL`. Techniczny `VERCEL_URL` może być chroniony przez Standard Deployment Protection i przekierowywać do logowania Vercel. Preview używa własnego `VERCEL_URL`, bez przechodzenia na domenę produkcyjną; wymaga konfiguracji Protection Bypass for Automation zgodnie z dokumentacją SDK. `x-real-ip` pochodzi z infrastruktury Vercel.
 Na innym hostingu produkcyjnym logowanie jest celowo zablokowane do czasu dodania współdzielonego limitera/WAF; nie wystarczy licznik w pamięci ani samo ustawienie flagi.
 Konfiguracja reguły na prawdziwym hostingu wymaga ręcznego sprawdzenia — lokalne testy jej nie publikują.
 

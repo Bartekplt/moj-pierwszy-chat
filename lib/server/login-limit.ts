@@ -20,8 +20,14 @@ export async function limitLogin(request: Request): Promise<Response | null> {
   }
 
   // Produkcja: żadnego awaryjnego przejścia na licznik w pamięci procesu.
-  const host = process.env.VERCEL_URL;
+  // W produkcji techniczny VERCEL_URL może wymagać Vercel Authentication.
+  // Wybieramy publiczną domenę projektu, zachowując ochronę wdrożeń preview.
+  const environment = process.env.VERCEL_ENV;
+  const host = environment === "production"
+    ? process.env.VERCEL_PROJECT_PRODUCTION_URL
+    : process.env.VERCEL_URL;
   if (process.env.NODE_ENV !== "production" || process.env.VERCEL !== "1" ||
+      !["production", "preview"].includes(environment ?? "") ||
       !host || !/^[a-zA-Z0-9.-]+$/.test(host)) {
     return unavailable();
   }
