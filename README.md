@@ -1,0 +1,87 @@
+# Mój chatbot — LABA
+
+## Publikacja na własnym GitHub i Vercel
+
+Docelowy runtime: Node.js **24.x**. `vercel.json` ustawia Next.js, instalację `npm ci` z zachowanego lockfile i build `npm run build`.
+Przed commitem uruchom `npm run check:publish`, `npm test` i `npm run build`.
+Kontrola publikacji nie odczytuje prywatnych plików `.env`; sprawdza listę plików Git, puste wartości `.env.example` oraz znane wzorce kluczy w plikach do publikacji. Nie zastępuje przeglądu plików.
+Jeżeli wykryje śledzony plik sekretów lub klucz w kodzie, zatrzymaj publikację — samo dodanie go do `.gitignore` nie usuwa go z historii.
+
+Utwórz nowe, puste repozytorium na **własnym koncie**, najlepiej prywatne. Nie inicjalizuj go README, licencją ani `.gitignore`, bo pliki są już lokalnie.
+Przed dodaniem zdalnego adresu sprawdź właściciela repozytorium; nie wysyłaj projektu do repozytorium kursu.
+Commit powinien mieć Twoją skonfigurowaną nazwę i adres autora z GitHub (może być adresem `noreply` z ustawień konta). Nie potrzebujesz podawać tokenu ani hasła w rozmowie.
+
+Po zapisaniu kodu we własnym repozytorium wybierz je w Vercel → Add New → Project → Import Git Repository.
+Framework: Next.js; Root Directory: `./`; Node.js: `24.x`. Włącz automatyczne udostępnianie systemowych zmiennych Vercel — limiter korzysta z `VERCEL` i `VERCEL_URL`.
+W panelu zmiennych projektu ustaw dla Production (oraz Preview, jeżeli go używasz) wyłącznie własne wartości:
+
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `CHAT_PASSWORD`
+- `SESSION_SECRET`
+
+Nie importuj pliku `.env.local` do repozytorium. W panelu Vercel wpisuj wartości bez otaczających cudzysłowów używanych w składni pliku `.env`.
+Dla produkcji użyj osobnego losowego sekretu sesji. Wygeneruj go lokalnie i przenieś bezpośrednio do panelu Vercel, bez wklejania do rozmowy.
+Po zmianach zmiennych wykonaj nowe wdrożenie. Przed uznaniem linku za gotowy skonfiguruj wymaganą regułę Firewalla `chat-login` opisaną poniżej — bez niej logowanie pozostanie zablokowane.
+
+Na **wdrożonym adresie HTTPS** sprawdź kolejno: ekran hasła w prywatnym oknie, odrzucenie błędnego hasła, wejście poprawnym, utrzymanie logowania po odświeżeniu i „Wyjdź” (także po ponownym odświeżeniu).
+Sprawdź też `401` z `/api/chat` bez cookie oraz flagi `HttpOnly`, `SameSite=Strict`, `Secure` w cookie. Te próby nie wymagają wywołania modelu.
+Na koniec właściciel aplikacji wykonuje jeden test wiadomości i historii rozmowy; może on naliczyć koszt OpenRouter. Dopiero po tych sprawdzeniach link jest gotowy do udostępnienia.
+
+Źródła: [Node.js na Vercel](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions), [import repozytorium](https://vercel.com/docs/git), [zmienne środowiskowe](https://vercel.com/docs/environment-variables).
+
+## Konfiguracja lokalna
+
+Plik `.env.local` leży obok `package.json` i ma być zwykłym tekstem, bez końcówki `.txt` lub `.rtf`.
+Wzór nazw zmiennych znajduje się w `.env.example`:
+
+- `OPENROUTER_API_KEY`: klucz OpenRouter, wyłącznie na serwerze.
+- `OPENROUTER_MODEL`: identyfikator wybranego modelu.
+- `CHAT_PASSWORD`: własne, trudne do odgadnięcia hasło warsztatowe.
+- `SESSION_SECRET`: kryptograficznie losowy sekret, co najmniej 32 bajty. Został wygenerowany lokalnie i dopisany do `.env.local` bez wyświetlania wartości. Nie zastępuj go hasłem warsztatowym ani nie dopisuj `NEXT_PUBLIC_`.
+
+Uzupełnij `CHAT_PASSWORD` po znaku `=`. Jeśli hasło zawiera spacje lub `#`, umieść je w podwójnych cudzysłowach. Nie wklejaj sekretów do rozmowy ani do repozytorium.
+Po edycji uruchom ponownie `npm run dev`. Adres: http://127.0.0.1:3000.
+`.gitignore` wyklucza `.env*` poza pustym wzorem `.env.example`.
+
+## Ochrona
+
+Hasło jest sprawdzane tylko na serwerze. Cookie zawiera losowy identyfikator, datę wystawienia i wygaśnięcia oraz podpis HMAC-SHA256; nie zawiera hasła.
+Sesja wygasa po 8 godzinach. Cookie ma `HttpOnly`, `SameSite=Strict`, `Path=/` i w produkcji `Secure` (wymagany HTTPS).
+Zmiana hasła lub sekretu unieważnia istniejące podpisy. Brak hasła albo zbyt krótki/brakujący sekret blokuje dostęp.
+`/api/chat` sprawdza cookie przed parsowaniem wiadomości i użyciem OpenRouter. Brak lub niepoprawna sesja daje `401`.
+Żądania POST muszą mieć nagłówek `Origin` zgodny z protokołem i nagłówkiem `Host` żądania (włącznie z portem). Dzięki temu lokalne `127.0.0.1:3000` działa także wtedy, gdy Next.js użyje wewnętrznie `localhost`. Dowolny `X-Forwarded-Host` nie jest zaufany; proxy musi zachować prawidłowy Host i protokół. Brak Origin lub obce pochodzenie są odrzucane.
+
+Przycisk „Wyjdź” przerywa bieżący strumień, usuwa cookie i czyści rozmowę w tej karcie.
+Sesje są bezstanowe: usunięcie cookie z przeglądarki nie unieważnia jego wcześniej skopiowanej kopii — ta wygasa po 8 godzinach albo po zmianie hasła/sekretu.
+
+## Limit prób i hosting
+
+Lokalny tryb `npm run dev` dopuszcza 5 prób logowania na minutę, łącznie dla procesu, także poprawnych lub pustych.
+Szósta zwraca `429` i `Retry-After`. Restart lub inny proces zeruje lokalny licznik — **to nie jest globalna ochrona hostingu**.
+
+Na Vercel kod korzysta z `@vercel/firewall`, bez awaryjnego przechodzenia na licznik lokalny.
+Przed udostępnieniem aplikacji skonfiguruj w panelu projektu:
+
+1. Firewall → Configure → New Rule.
+2. Warunek `@vercel/firewall`, Rate limit ID: `chat-login`.
+3. Limit **5 żądań na 60 sekund**, akcja blokująca/`429`; bez dodatkowych filtrów wykluczających logowanie.
+4. Zapisz, przejrzyj zmiany i opublikuj regułę. Dla preview włącz Protection Bypass for Automation i systemowe zmienne Vercel zgodnie z dokumentacją.
+5. Ustaw cztery zmienne z `.env.example` jako sekrety projektu. Dla hostingu wygeneruj osobny `SESSION_SECRET`.
+
+Limiter Vercel działa per IP i region, współdzieląc licznik między instancjami w regionie; nie jest jednym globalnym licznikiem wszystkich regionów.
+Brak reguły, błąd lub niedostępność Firewalla zwraca `503` i blokuje logowanie. `VERCEL_URL` jest zaufanym hostem usługi, a `x-real-ip` pochodzi z infrastruktury Vercel.
+Na innym hostingu produkcyjnym logowanie jest celowo zablokowane do czasu dodania współdzielonego limitera/WAF; nie wystarczy licznik w pamięci ani samo ustawienie flagi.
+Konfiguracja reguły na prawdziwym hostingu wymaga ręcznego sprawdzenia — lokalne testy jej nie publikują.
+
+Źródła: [Next.js — sesje i autoryzacja](https://nextjs.org/docs/app/guides/authentication), [Vercel — Rate Limiting SDK](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting-sdk).
+
+## Sprawdzenia
+
+`npm test` używa wyłącznie danych testowych i podmienionej sieci, bez czytania `.env.local` i bez płatnych wywołań.
+Sprawdza błędne i poprawne hasło, brak konfiguracji, atrybuty cookie, wygasłe i zmodyfikowane sesje, wyjście, `401` bez sesji, obcy Origin, limit prób oraz odmowę logowania w produkcji bez działającego Firewalla.
+Wcześniejsze testy czatu nadal sprawdzają strumieniowanie i historię na danych testowych.
+`npm run build` sprawdza kompilację aplikacji i TypeScript.
+
+Ręcznie w przeglądarce sprawdź po ustawieniu hasła: odrzucenie złego hasła, wejście poprawnym, odświeżenie bez ponownego logowania, „Wyjdź” i ponowne wyświetlenie ekranu hasła po odświeżeniu.
+Te czynności nie wymagają wysyłania wiadomości do modelu. Na HTTPS sprawdź również `Secure` w narzędziach przeglądarki i faktyczny limit reguły Firewalla.
