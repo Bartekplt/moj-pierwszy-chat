@@ -70,6 +70,15 @@ button {
 button:disabled { opacity: 0.55; cursor: default; }
 input:focus-visible, button:focus-visible { outline: 3px solid #799df8; outline-offset: 3px; }
 
+.mode-switch, .analysis-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+textarea { width: 100%; padding: 14px; border: 1px solid #aebbd0; border-radius: 10px; font: inherit; resize: vertical; }
+textarea:focus-visible { outline: 3px solid #799df8; outline-offset: 3px; }
+.analysis-result { margin-top: 24px; padding: 20px; border: 1px solid #d7deea; border-radius: 14px; background: white; }
+.analysis-result h2 { margin-top: 0; font-size: 22px; }
+.analysis-result dt { font-weight: 600; margin-top: 14px; }
+.analysis-result dd { margin: 6px 0 0; }
+.draft { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 @media (max-width: 480px) {
   main { margin-top: 24px; }
   .conversation { height: 55vh; }

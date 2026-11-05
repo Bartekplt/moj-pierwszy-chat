@@ -1,5 +1,55 @@
 # Mój chatbot — LABA
 
+## Analiza wiadomości Studio Nova
+
+Po zalogowaniu wybierz „Analiza Studio Nova”. Zwykły czat nadal ma osobną historię
+i strumieniuje odpowiedzi. Analiza przyjmuje pojedynczą wiadomość i pokazuje dopiero
+kompletny wynik: `category`, `priority`, `draft`, `needs_review`. Każdy wynik jest
+szkicem, także przy `needs_review=false`; aplikacja niczego nie wysyła, nie rezerwuje
+i nie wykonuje operacji płatniczych. Przełączenie na czat lub wylogowanie przerywa analizę.
+
+Serwer korzysta z AI SDK **7.0.157**: `generateText`, `Output.object` i `jsonSchema`
+z funkcją walidacji. Provider OpenRouter **3.1.0** wysyła `response_format=json_schema`
+z `strict=true`, `require_parameters=true` i wyłączonym fallbackiem dostawcy.
+Wymagane są dokładnie cztery pola, wskazane typy i wartości enum; dodatkowe pola
+są odrzucane. Nie naprawiamy odpowiedzi ani nie podstawiamy domyślnego wyniku.
+Kategorie i priorytet ustala model według reguł w instrukcji; walidacja schematu
+potwierdza strukturę wyniku, a nie poprawność merytoryczną klasyfikacji.
+
+Analiza używa obecnego `OPENROUTER_MODEL`. Przed generowaniem sprawdza jego
+`supported_parameters` w publicznym katalogu `/api/v1/models` (bez klucza i bez
+wiadomości klienta). Wymaga `structured_outputs`; endpoint musi też przyjąć
+rzeczywisty schemat. Brak wsparcia lub odrzucenie konfiguracji daje czytelny błąd,
+bez przejścia na zwykły JSON ani inny model. W takim przypadku sprawdź na stronie
+modelu OpenRouter obsługę structured output przez endpoint. Ewentualną zmianę
+`OPENROUTER_MODEL` i jej koszt uzgodnij przed edycją konfiguracji; po niej zrestartuj
+serwer. Nie zmieniono żadnej wartości konfiguracji. Niedostępność katalogu również
+blokuje analizę; zwykły czat nie korzysta z tego sprawdzenia.
+
+`/api/analyze` sprawdza sesję i Origin przed parsowaniem danych i połączeniem
+z OpenRouter. Klucz pozostaje na serwerze. Błędy mają osobny status HTTP i komunikat,
+bez surowej odpowiedzi dostawcy. Odmowa, niepełny wynik, anulowanie, timeout (45 s),
+błąd dostawcy i niezgodność schematu nie są prezentowane jako analiza.
+
+Testy lokalne: `npm test` — walidacja oraz pełna ścieżka SDK/provider z atrapą sieci,
+w tym braki pól, złe typy i enumy, dodatkowe pola, odmowa, przerwanie i błędy OpenRouter.
+Testy nie wywołują modelu ani nie wczytują prywatnych plików `.env`.
+
+Pierwszą prawdziwą analizę uruchom samodzielnie na `http://localhost:3000`:
+
+- „Proszę o ofertę dla 8 osób.” → `sales`, `normal`, pytanie o zakres, `needs_review=true`.
+- „Nie mogę się zalogować.” → `support`, `normal`, prośba o komunikat błędu, `needs_review=true`.
+- „Opłaciłem konsultację, zaczyna się za 30 minut, ale nie mogę wejść na spotkanie.”
+  → `support`, `high`, skierowanie do pracownika, `needs_review=true`.
+- „Proszę o zwrot płatności.” → `billing`, `normal`, bez potwierdzania zwrotu, `needs_review=true`.
+- „Ile trwa i kosztuje konsultacja online?” → `sales`, `normal`, 45 minut i 150 zł brutto,
+  `needs_review=false`; wynik nadal musi być oznaczony jako szkic.
+
+Dokumentacja sprawdzona przed zmianą API:
+[AI SDK — structured data](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data),
+[OpenRouter — structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs),
+[OpenRouter — katalog modeli](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).
+
 ## Publikacja na własnym GitHub i Vercel
 
 Docelowy runtime: Node.js **24.x**. `vercel.json` ustawia Next.js, instalację `npm ci` z zachowanego lockfile i build `npm run build`.

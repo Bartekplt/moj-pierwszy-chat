@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import MessageAnalysis from "./analysis";
 
 const transport = new DefaultChatTransport({
   api: "/api/chat",
@@ -14,6 +15,7 @@ const transport = new DefaultChatTransport({
 });
 
 export default function Chat() {
+  const [mode, setMode] = useState<"chat" | "analysis">("chat");
   const [message, setMessage] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -61,6 +63,14 @@ export default function Chat() {
           {leaving ? "Wychodzę…" : "Wyjdź"}
         </button>
       </header>
+      <nav className="mode-switch" aria-label="Tryb pracy">
+        <button type="button" className={mode === "chat" ? "" : "secondary"} aria-pressed={mode === "chat"}
+          disabled={waiting || leaving} onClick={() => setMode("chat")}>Zwykły czat</button>
+        <button type="button" className={mode === "analysis" ? "" : "secondary"} aria-pressed={mode === "analysis"}
+          disabled={waiting || leaving} onClick={() => setMode("analysis")}>Analiza Studio Nova</button>
+      </nav>
+      {logoutError && <p className="error" role="alert">{logoutError}</p>}
+      {mode === "analysis" ? <MessageAnalysis leaving={leaving} /> : <>
       <section ref={conversation} className="conversation" aria-label="Rozmowa" role="log" aria-live="polite" aria-busy={waiting}>
         {messages.map((item) => (
           <div className={`message ${item.role}`} key={item.id}>
@@ -77,7 +87,6 @@ export default function Chat() {
         </p>
       )}
       {error && <p className="error" role="alert">{errorMessage}</p>}
-      {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <form onSubmit={sendMessage}>
         <label htmlFor="message">Wiadomość</label>
         <div className="composer">
@@ -95,6 +104,7 @@ export default function Chat() {
           </button>
         </div>
       </form>
+      </>}
     </main>
   );
 }
