@@ -100,7 +100,13 @@ test("walidacja, brak konfiguracji, strumieniowanie i historia bez wywołań API
     await chat.sendMessage({ text: "Jak mam na imię?" });
     assert.equal(chat.status, "ready");
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls[1].messages.map(({ role }) => role), ["user", "assistant", "user"]);
+    assert.deepEqual(calls[0].messages.map(({ role }) => role), ["system", "user"]);
+    assert.deepEqual(calls[1].messages.map(({ role }) => role), ["system", "user", "assistant", "user"]);
+    assert.deepEqual(calls[0].messages[0].content, calls[1].messages[0].content);
+    const instructions = calls[1].messages[0].content.map(({ text }) => text).join("");
+    assert.match(instructions, /Jesteś asystentem Studio Nova/);
+    assert.match(instructions, /45 minut.*150 zł brutto/);
+    assert.equal(calls[0].messages[1].content, "Mam na imię Ola.");
     assert.match(JSON.stringify(calls[1].messages), /Mam na imię Ola/);
     assert.match(JSON.stringify(calls[1].messages), /Pamiętam/);
     assert.equal(calls[1].model, "test/model");
