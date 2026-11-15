@@ -35,10 +35,10 @@ export default function MessageAnalysis({ leaving }: { leaving: boolean }) {
     setResult(null);
     setError("");
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: message.trim() }),
+        body: JSON.stringify({ mode: "analyze", message: message.trim() }),
         signal: controller.signal,
       });
       if (response.status === 401) {

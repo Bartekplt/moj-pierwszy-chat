@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateAnalysis } from "../lib/analysis.ts";
 import { analysisSchema } from "../lib/server/analysis.ts";
-import { POST } from "../app/api/analyze/route.ts";
+import { POST } from "../app/api/agent/route.ts";
 import { createSession, SESSION_COOKIE } from "../lib/server/session.ts";
 
 // Nie wczytujemy .env. Wszystkie odpowiedzi, także katalog modeli, są lokalne.
@@ -18,8 +18,8 @@ const headers = () => ({
   "Content-Type": "application/json", Origin: "http://localhost",
   Cookie: `${SESSION_COOKIE}=${createSession()}`,
 });
-const request = (body = { message: "Proszę o ofertę dla 8 osób." }, options = {}) => new Request("http://localhost/api/analyze", {
-  method: "POST", headers: headers(), body: JSON.stringify(body), ...options,
+const request = (body = { message: "Proszę o ofertę dla 8 osób." }, options = {}) => new Request("http://localhost/api/agent", {
+  method: "POST", headers: headers(), body: JSON.stringify(body && typeof body === "object" && !Array.isArray(body) ? { ...body, mode: "analyze" } : body), ...options,
 });
 const completion = (content = JSON.stringify(valid), reason = "stop", extra = {}) => Response.json({
   id: "local-response", model: "test/model", created: 0,

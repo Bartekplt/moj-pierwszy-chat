@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { POST as login } from "../app/api/login/route.ts";
 import { POST as logout } from "../app/api/logout/route.ts";
-import { POST as chat } from "../app/api/chat/route.ts";
+import { POST as chat } from "../app/api/agent/route.ts";
 import { createSession, verifySession, SESSION_COOKIE, SESSION_TTL } from "../lib/server/session.ts";
 
 // Wyłącznie wartości testowe; bez wczytywania .env i bez prawdziwej sieci.
@@ -25,8 +25,8 @@ const makeRequest = (path, body, headers = {}) => new Request(`http://localhost$
   headers: { "Content-Type": "application/json", Origin: "http://localhost", "x-real-ip": "203.0.113.5", ...headers },
 });
 const loginRequest = (value = password, headers = {}) => makeRequest("/api/login", { password: value }, headers);
-const chatRequest = (cookie = "") => makeRequest("/api/chat", {
-  messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "Cześć" }] }],
+const chatRequest = (cookie = "") => makeRequest("/api/agent", {
+  mode: "chat", messages: [{ id: "u1", role: "user", parts: [{ type: "text", text: "Cześć" }] }],
 }, { Cookie: cookie });
 const cookieFor = (token) => `${SESSION_COOKIE}=${token}`;
 
@@ -71,7 +71,7 @@ test("ochrona warsztatowego czatu", async (t) => {
       assert.equal((await chat(chatRequest(invalidCookie))).status, 401);
     }
     // Poprawna sesja przechodzi kontrolę dostępu; błędne body zatrzymuje ją przed modelem.
-    assert.equal((await chat(makeRequest("/api/chat", { messages: [] }, { Cookie: cookie }))).status, 400);
+    assert.equal((await chat(makeRequest("/api/agent", { mode: "chat", messages: [] }, { Cookie: cookie }))).status, 400);
     assert.equal(verifySession(token, now + SESSION_TTL), false);
     process.env.CHAT_PASSWORD = "changed-password";
     assert.equal(verifySession(token), false);
@@ -86,7 +86,7 @@ test("ochrona warsztatowego czatu", async (t) => {
     const foreign = { Origin: "https://obca-strona.example", Cookie: cookie };
     assert.equal((await login(loginRequest(password, foreign))).status, 403);
     assert.equal((await logout(makeRequest("/api/logout", {}, foreign))).status, 403);
-    assert.equal((await chat(makeRequest("/api/chat", {}, foreign))).status, 403);
+    assert.equal((await chat(makeRequest("/api/agent", {}, foreign))).status, 403);
   });
 
   await t.test("wyjście usuwa cookie; po jego usunięciu czat odmawia dostępu", async () => {

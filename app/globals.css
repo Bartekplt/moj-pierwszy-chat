@@ -40,6 +40,24 @@ button.secondary { background: #e2e8f3; color: #172033; }
 
 .message.assistant { margin-left: 0; background: #f0f2f6; }
 .speaker { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.tool-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; white-space: normal; }
+.tool-badge { border: 1px solid #c9d4e7; border-radius: 999px; padding: 3px 8px; background: #e8efff; color: #34486b; font-size: 12px; }
+.photo-thumbnail { display: block; max-width: min(180px, 100%); max-height: 150px; object-fit: contain; border-radius: 8px; margin: 8px 0; }
+.generated-image { display: block; max-width: 100%; max-height: 480px; object-fit: contain; border-radius: 8px; }
+.model-caption { display: block; margin-top: 8px; font-size: 12px; color: #465674; white-space: normal; }
+.image-actions, .photo-preview { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.image-actions small { width: 100%; color: #465674; }
+.image-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.image-suggestions small { width: 100%; color: #465674; }
+button.prompt-suggestion { padding: 8px 12px; border-radius: 18px; font-size: 13px; font-weight: 400; }
+.download-image { display: inline-block; margin-top: 10px; padding: 8px 14px; border-radius: 8px; background: #2454cc; color: white; font-size: 14px; text-decoration: none; white-space: normal; }
+.download-image:focus-visible { outline: 3px solid #799df8; outline-offset: 3px; }
+.sources { margin-top: 12px; padding-top: 10px; border-top: 1px solid #d7deea; font-size: 13px; white-space: normal; }
+.sources ul { margin: 8px 0; padding-left: 20px; }
+.sources li { margin: 4px 0; }
+.sources a { color: #2454cc; }
+.sources a:focus-visible { outline: 3px solid #799df8; outline-offset: 3px; }
+.sources small { color: #465674; }
 .status { color: #465674; }
 .error { padding: 12px; border-radius: 10px; background: #ffeded; color: #9b2020; }
 

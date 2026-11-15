@@ -1,8 +1,33 @@
 # Mój chatbot — LABA
 
+## Jeden endpoint agenta
+
+`POST /api/agent` najpierw sprawdza sesję i Origin, następnie odczytuje pole `mode`:
+
+- `{"mode":"chat","messages":[...]}` — rozmowa strumieniowana przez `streamText`,
+  z narzędziami `web_search`, `aktualnyCzas` i `generujObraz`. Limit to `isStepCount(5)`.
+  Zdjęcia użytkownika są częściami `file` (JPG, PNG, WebP, do 4 MB).
+- `{"mode":"analyze","message":"treść wiadomości klienta"}` — kompletny wynik JSON,
+  generowany przez `generateText` z `Output.object` i walidowany po stronie serwera.
+
+`generujObraz` przyjmuje opis do 500 znaków i używa Nano Banana 2.1.
+Pełny wynik narzędzia trafia do przeglądarki; `toModelOutput` przekazuje modelowi
+wyłącznie tekst „obraz wygenerowany”. Przy kolejnych wiadomościach dane obrazu
+również nie wracają w historii do modelu. Obraz, „Pobierz” i model z odpowiedzi API
+są widoczne w rozmowie. Przycisk „Wygeneruj obraz” korzysta z tego samego agenta.
+
+Stare endpointy rozmowy, analizy i obrazu zostały usunięte po sprawdzeniu obu trybów.
+
+Nad odpowiedzią pojawiają się numerowane etykiety narzędzi w kolejności użycia,
+także przy ponownym użyciu tego samego narzędzia. Źródła jednego wyszukiwania
+nie tworzą dodatkowych etykiet. Jeśli agent wyczerpie pięć kroków i nadal próbuje
+kontynuować pracę z narzędziami, strumień dopisuje „Przerwałem po 5 krokach”.
+Normalne ukończenie odpowiedzi w piątym kroku nie jest oznaczane jako przerwanie.
+Przy zadaniu złożonym instrukcja nakazuje najpierw zebrać informacje, potem tworzyć.
+
 ## Analiza wiadomości Studio Nova
 
-Po zalogowaniu wybierz „Analiza Studio Nova”. Zwykły czat nadal ma osobną historię
+Po zalogowaniu wybierz „Analiza JSON”. Zwykły czat nadal ma osobną historię
 i strumieniuje odpowiedzi. Analiza przyjmuje pojedynczą wiadomość i pokazuje dopiero
 kompletny wynik: `category`, `priority`, `draft`, `needs_review`. Każdy wynik jest
 szkicem, także przy `needs_review=false`; aplikacja niczego nie wysyła, nie rezerwuje
@@ -26,7 +51,7 @@ modelu OpenRouter obsługę structured output przez endpoint. Ewentualną zmian�
 serwer. Nie zmieniono żadnej wartości konfiguracji. Niedostępność katalogu również
 blokuje analizę; zwykły czat nie korzysta z tego sprawdzenia.
 
-`/api/analyze` sprawdza sesję i Origin przed parsowaniem danych i połączeniem
+`/api/agent` sprawdza sesję i Origin przed parsowaniem danych i połączeniem
 z OpenRouter. Klucz pozostaje na serwerze. Błędy mają osobny status HTTP i komunikat,
 bez surowej odpowiedzi dostawcy. Odmowa, niepełny wynik, anulowanie, timeout (45 s),
 błąd dostawcy i niezgodność schematu nie są prezentowane jako analiza.
@@ -75,7 +100,7 @@ Dla produkcji użyj osobnego losowego sekretu sesji. Wygeneruj go lokalnie i prz
 Po zmianach zmiennych wykonaj nowe wdrożenie. Przed uznaniem linku za gotowy skonfiguruj wymaganą regułę Firewalla `chat-login` opisaną poniżej — bez niej logowanie pozostanie zablokowane.
 
 Na **wdrożonym adresie HTTPS** sprawdź kolejno: ekran hasła w prywatnym oknie, odrzucenie błędnego hasła, wejście poprawnym, utrzymanie logowania po odświeżeniu i „Wyjdź” (także po ponownym odświeżeniu).
-Sprawdź też `401` z `/api/chat` bez cookie oraz flagi `HttpOnly`, `SameSite=Strict`, `Secure` w cookie. Te próby nie wymagają wywołania modelu.
+Sprawdź też `401` z `/api/agent` bez cookie oraz flagi `HttpOnly`, `SameSite=Strict`, `Secure` w cookie. Te próby nie wymagają wywołania modelu.
 Na koniec właściciel aplikacji wykonuje jeden test wiadomości i historii rozmowy; może on naliczyć koszt OpenRouter. Dopiero po tych sprawdzeniach link jest gotowy do udostępnienia.
 
 Źródła: [Node.js na Vercel](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions), [import repozytorium](https://vercel.com/docs/git), [zmienne środowiskowe](https://vercel.com/docs/environment-variables).
@@ -99,7 +124,7 @@ Po edycji uruchom ponownie `npm run dev`. Adres: http://127.0.0.1:3000.
 Hasło jest sprawdzane tylko na serwerze. Cookie zawiera losowy identyfikator, datę wystawienia i wygaśnięcia oraz podpis HMAC-SHA256; nie zawiera hasła.
 Sesja wygasa po 8 godzinach. Cookie ma `HttpOnly`, `SameSite=Strict`, `Path=/` i w produkcji `Secure` (wymagany HTTPS).
 Zmiana hasła lub sekretu unieważnia istniejące podpisy. Brak hasła albo zbyt krótki/brakujący sekret blokuje dostęp.
-`/api/chat` sprawdza cookie przed parsowaniem wiadomości i użyciem OpenRouter. Brak lub niepoprawna sesja daje `401`.
+`/api/agent` sprawdza cookie przed parsowaniem wiadomości i użyciem OpenRouter. Brak lub niepoprawna sesja daje `401`.
 Żądania POST muszą mieć nagłówek `Origin` zgodny z protokołem i nagłówkiem `Host` żądania (włącznie z portem). Dzięki temu lokalne `127.0.0.1:3000` działa także wtedy, gdy Next.js użyje wewnętrznie `localhost`. Dowolny `X-Forwarded-Host` nie jest zaufany; proxy musi zachować prawidłowy Host i protokół. Brak Origin lub obce pochodzenie są odrzucane.
 
 Przycisk „Wyjdź” przerywa bieżący strumień, usuwa cookie i czyści rozmowę w tej karcie.

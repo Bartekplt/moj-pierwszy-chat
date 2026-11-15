@@ -1,23 +1,14 @@
-import { analyzeMessage, AnalysisError } from "../../../lib/server/analysis.ts";
-import { hasRequestSession, isSameOrigin } from "../../../lib/server/session.ts";
-
-export const runtime = "nodejs";
+import { analyzeMessage, AnalysisError } from "./analysis.ts";
 
 function json(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export async function POST(request: Request) {
-  if (!hasRequestSession(request)) {
-    return json({ error: "Sesja wygasła lub nie jesteś zalogowany. Wpisz hasło ponownie." }, 401);
-  }
-  if (!isSameOrigin(request)) return json({ error: "Niedozwolone pochodzenie żądania." }, 403);
-
+export async function analysisResponse(request: Request, body: unknown) {
   let message: string;
   try {
-    const body: unknown = await request.json();
     if (!body || typeof body !== "object" || Array.isArray(body) ||
-        Object.keys(body).length !== 1 || !("message" in body) ||
+        Object.keys(body).length !== 2 || !("message" in body) ||
         typeof body.message !== "string" || !body.message.trim() || body.message.length > 12000) {
       throw new Error("Nieprawidłowa wiadomość");
     }
