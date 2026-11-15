@@ -6,6 +6,7 @@ import { POST } from "../app/api/agent/route.ts";
 import { prepareAgentMessages } from "../lib/chat.ts";
 import { createSession, SESSION_COOKIE } from "../lib/server/session.ts";
 import { generatePicture, validateImagePrompt } from "../lib/server/image-generation.ts";
+import { imageFailureMessages } from "../lib/image-errors.ts";
 
 // Dane i odpowiedzi testowe; bez .env i bez prawdziwych wywołań modeli.
 process.env.NODE_ENV = "test";
@@ -122,7 +123,7 @@ test("błąd generowania pozostaje błędem narzędzia, bez danych dostawcy i po
   assert.equal(chat.status, "ready");
   const part = chat.messages.at(-1).parts.find((part) => part.type === "tool-generujObraz");
   assert.equal(part.state, "output-error");
-  assert.match(part.errorText, /Nie udało się wygenerować obrazu/);
+  assert.equal(part.errorText, imageFailureMessages.unavailable);
   assert.equal(imageCalls, 1);
 });
 
@@ -194,9 +195,24 @@ test("walidacja opisów obrazu, odmowa oraz brak identyfikatora z API", async ()
   globalThis.fetch = async () => Response.json({ choices: [{ message: { images: [{ image_url: { url: imageUrl } }] } }] });
   const result = await generatePicture({ apiKey: "test-only-key", prompt: "Kot", signal: new AbortController().signal });
   assert.equal(result.modelId, null);
-  for (const payload of [{ choices: [{ message: { content: "Odmowa", images: [] } }] },
-    { choices: [{ message: { images: [{ image_url: { url: "https://obca.example/image.png" } }] } }] }]) {
+  for (const [payload, expected] of [[{ choices: [{ message: { content: "Odmowa", images: [] } }] }, imageFailureMessages.empty],
+    [{ choices: [{ message: { images: [{ image_url: { url: "https://obca.example/image.png" } }] } }] }, imageFailureMessages.format]]) {
     globalThis.fetch = async () => Response.json(payload);
-    await assert.rejects(generatePicture({ apiKey: "test-only-key", prompt: "Kot", signal: new AbortController().signal }), /Nie udało się wygenerować obrazu/);
+    await assert.rejects(generatePicture({ apiKey: "test-only-key", prompt: "Kot", signal: new AbortController().signal }), { message: expected });
   }
+});
+
+test("błędny opis wygenerowany przez agenta pokazuje błąd parametrów i nie wywołuje obrazu", async () => {
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.modalities, undefined, "Błędny opis nie może uruchomić płatnego generowania");
+    return ++calls === 1 ? streamReply({ name: "generujObraz", input: { prompt: "x".repeat(501) } }) : streamReply();
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Wygeneruj wnętrze salonu z kuchnią i jadalnią." });
+  assert.equal(chat.status, "ready");
+  const part = chat.messages.at(-1).parts.find((part) => part.type === "tool-generujObraz");
+  assert.equal(part.state, "output-error");
+  assert.equal(part.errorText, imageFailureMessages.input);
 });

@@ -1,7 +1,9 @@
 import { studioNovaInstructions } from "./studio-nova.ts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { aktualnyCzas } from "./chat-tools.ts";
-import { createImageTool, imageGenerationError } from "./image-generation.ts";
+import { createImageTool } from "./image-generation.ts";
+import { ImageGenerationError } from "./image-errors.ts";
+import { imageFailureMessages } from "../image-errors.ts";
 import type { ChatMessage, ChatToolName } from "../chat.ts";
 import { isValidPhoto } from "./image-input.ts";
 import { IMAGE_INPUT_ERROR } from "../images.ts";
@@ -9,6 +11,7 @@ import {
   convertToModelMessages,
   createUIMessageStreamResponse,
   isStepCount,
+  InvalidToolInputError,
   streamText,
   toUIMessageStream,
   validateUIMessages,
@@ -126,10 +129,20 @@ export async function chatResponse(request: Request, body: unknown) {
     let completedSteps = 0;
     let hasText = false;
     let interrupted = false;
+    const invalidImageCalls = new Set<string>();
     const responseStream = result.stream.pipeThrough(new TransformStream<
       TextStreamPart<typeof tools>, TextStreamPart<typeof tools>
     >({
       transform(part, controller) {
+        if (part.type === "tool-call" && part.invalid && part.toolName === "generujObraz") {
+          invalidImageCalls.add(part.toolCallId);
+          controller.enqueue({ ...part, error: new ImageGenerationError("input") });
+          return;
+        }
+        if (part.type === "tool-error" && invalidImageCalls.has(part.toolCallId)) {
+          controller.enqueue({ ...part, error: new ImageGenerationError("input") });
+          return;
+        }
         if (part.type === "finish-step") completedSteps++;
         if (part.type === "text-delta" && part.text.trim()) hasText = true;
         if (part.type === "abort" || part.type === "error") interrupted = true;
@@ -182,8 +195,11 @@ export async function chatResponse(request: Request, body: unknown) {
             return { usedTools: [...usedTools] };
           }
         },
-        onError: (error) => error instanceof Error && error.message === imageGenerationError
-          ? imageGenerationError : currentResponseError,
+        onError: (error) => {
+          if (error instanceof ImageGenerationError) return error.message;
+          if (InvalidToolInputError.isInstance(error) && error.toolName === "generujObraz") return imageFailureMessages.input;
+          return currentResponseError;
+        },
       }),
     });
   } catch {

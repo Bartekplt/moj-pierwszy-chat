@@ -1,4 +1,5 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { imageHttpError, ImageGenerationError } from "./image-errors.ts";
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -24,15 +25,21 @@ export function imageModelWithResponseMetadata(apiKey: string) {
     });
     if (!response.ok) return response;
     const payload = record(await response.json());
+    if (payload.error) {
+      const code = record(payload.error).code;
+      throw imageHttpError(typeof code === "number" ? code : undefined);
+    }
     if (typeof payload.model === "string" && payload.model.trim()) modelId = payload.model;
     const choice = Array.isArray(payload.choices) ? record(payload.choices[0]) : {};
     const message = record(choice.message);
+    if (message.refusal || choice.finish_reason === "content_filter") throw new ImageGenerationError("refused");
     const images = Array.isArray(message.images) ? message.images : [];
+    if (!images.length) throw new ImageGenerationError("empty");
     const data = images.map((image: unknown) => {
       const url = record(record(image).image_url).url;
-      if (typeof url !== "string") throw new Error("Brak obrazu w odpowiedzi");
+      if (typeof url !== "string") throw new ImageGenerationError("format");
       const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]+=*)$/.exec(url);
-      if (!match) throw new Error("Nieprawidłowy obraz w odpowiedzi");
+      if (!match) throw new ImageGenerationError("format");
       return { b64_json: match[1] };
     });
     const usage = record(payload.usage);

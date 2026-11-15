@@ -16,6 +16,12 @@ wyłącznie tekst „obraz wygenerowany”. Przy kolejnych wiadomościach dane o
 również nie wracają w historii do modelu. Obraz, „Pobierz” i model z odpowiedzi API
 są widoczne w rozmowie. Przycisk „Wygeneruj obraz” korzysta z tego samego agenta.
 
+Błędy obrazu rozróżniają nieprawidłowy opis, odrzucenie klucza, brak środków,
+ograniczenie liczby żądań, odmowę modelu, pustą odpowiedź i limit czasu.
+Przeglądarka pokazuje tylko przygotowane polskie komunikaty. Log serwera
+`image_generation_failed` zawiera wyłącznie kod błędu, status HTTP i czas operacji;
+nie zawiera opisu użytkownika, klucza, obrazu ani surowej odpowiedzi OpenRouter.
+
 Stare endpointy rozmowy, analizy i obrazu zostały usunięte po sprawdzeniu obu trybów.
 
 Nad odpowiedzią pojawiają się numerowane etykiety narzędzi w kolejności użycia,

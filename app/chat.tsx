@@ -7,6 +7,7 @@ import MessageAnalysis from "./analysis";
 import GeneratedImageView from "./generated-image";
 import { chatToolLabels, prepareAgentMessages, type ChatMessage } from "../lib/chat";
 import { IMAGE_PROMPTS, isGeneratedImage, matchesImageType, photoSelectionError } from "../lib/images";
+import { publicImageError } from "../lib/image-errors";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -162,7 +163,7 @@ export default function Chat() {
                   return <GeneratedImageView key={part.toolCallId} id={part.toolCallId} image={part.output} />;
                 }
                 if (part.state === "output-error") return <p className="error" role="alert" key={part.toolCallId}>
-                  Nie udało się wygenerować obrazu. Model może być chwilowo niedostępny. Spróbuj ponownie później.
+                  {publicImageError(part.errorText)}
                 </p>;
               }
               if (part.type === "file" && part.mediaType.startsWith("image/")) return (
