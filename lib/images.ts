@@ -12,6 +12,18 @@ export function isGeneratedImage(value: unknown): value is GeneratedImage {
     (item.modelId === null || typeof item.modelId === "string");
 }
 
+export function imageFailureToShow(parts: UIMessage["parts"], index: number, inProgress: boolean): string | null {
+  const part = parts[index];
+  if (!part || inProgress ||
+    !(part.type === "tool-generujObraz" || (part.type === "dynamic-tool" && part.toolName === "generujObraz")) ||
+    part.state !== "output-error") return null;
+  const recovered = parts.slice(index + 1).some((next) =>
+    (next.type === "tool-generujObraz" || (next.type === "dynamic-tool" && next.toolName === "generujObraz")) &&
+    next.state === "output-available" && isGeneratedImage(next.output),
+  );
+  return recovered ? null : publicImageError(part.errorText);
+}
+
 export const IMAGE_PROMPTS = [
   { label: "Powitanie w Studio Nova", prompt: "Przyjazna grafika powitalna dla klientów Studio Nova: jasne biurko, laptop i roślina, spokojne kolory, minimalistyczna ilustracja, bez napisów." },
   { label: "Konsultacja online", prompt: "Ilustracja konsultacji online w Studio Nova: dwie osoby rozmawiają przez wideopołączenie na laptopie, ciepła i profesjonalna atmosfera, jasne tło, bez napisów." },
@@ -38,3 +50,6 @@ export function matchesImageType(bytes: Uint8Array, mediaType: string) {
   }
   return false;
 }
+import type { UIMessage } from "ai";
+import { publicImageError } from "./image-errors.ts";
+

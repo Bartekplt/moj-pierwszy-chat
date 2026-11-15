@@ -6,8 +6,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import MessageAnalysis from "./analysis";
 import GeneratedImageView from "./generated-image";
 import { chatToolLabels, prepareAgentMessages, type ChatMessage } from "../lib/chat";
-import { IMAGE_PROMPTS, isGeneratedImage, matchesImageType, photoSelectionError } from "../lib/images";
-import { publicImageError } from "../lib/image-errors";
+import { IMAGE_PROMPTS, imageFailureToShow, isGeneratedImage, matchesImageType, photoSelectionError } from "../lib/images";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -162,9 +161,11 @@ export default function Chat() {
                 if (part.state === "output-available" && isGeneratedImage(part.output)) {
                   return <GeneratedImageView key={part.toolCallId} id={part.toolCallId} image={part.output} />;
                 }
-                if (part.state === "output-error") return <p className="error" role="alert" key={part.toolCallId}>
-                  {publicImageError(part.errorText)}
-                </p>;
+                if (part.state === "output-error") {
+                  const failure = imageFailureToShow(item.parts, index, item.id === messages.at(-1)?.id &&
+                    (status === "submitted" || status === "streaming"));
+                  return failure ? <p className="error" role="alert" key={part.toolCallId}>{failure}</p> : null;
+                }
               }
               if (part.type === "file" && part.mediaType.startsWith("image/")) return (
                 <img key={index} className="photo-thumbnail" src={part.url} alt={part.filename || "Zdjęcie w rozmowie"} />

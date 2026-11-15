@@ -21,6 +21,9 @@ ograniczenie liczby żądań, odmowę modelu, pustą odpowiedź i limit czasu.
 Przeglądarka pokazuje tylko przygotowane polskie komunikaty. Log serwera
 `image_generation_failed` zawiera wyłącznie kod błędu, status HTTP i czas operacji;
 nie zawiera opisu użytkownika, klucza, obrazu ani surowej odpowiedzi OpenRouter.
+Błąd narzędzia jest pokazywany dopiero po zakończeniu pracy agenta. Jeśli agent
+poprawi nieudaną próbę i wygeneruje obraz w tej samej odpowiedzi, wcześniejszy
+komunikat błędu nie pozostaje obok gotowego obrazu.
 
 Stare endpointy rozmowy, analizy i obrazu zostały usunięte po sprawdzeniu obu trybów.
 

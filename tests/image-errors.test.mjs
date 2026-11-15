@@ -4,6 +4,7 @@ import { APICallError, NoImageGeneratedError } from "ai";
 import { generatePicture, validateImagePrompt } from "../lib/server/image-generation.ts";
 import { classifyImageError } from "../lib/server/image-errors.ts";
 import { imageFailureMessages, publicImageError } from "../lib/image-errors.ts";
+import { imageFailureToShow } from "../lib/images.ts";
 
 test("błędy OpenRouter mają właściwe polskie komunikaty i bezpieczne logi", async () => {
   const originalWarn = console.warn;
@@ -47,4 +48,23 @@ test("opakowany błąd SDK zachowuje kod, a przeglądarka nie wyświetla nieznan
 
 test("opis zgłoszonego wnętrza mieści się w limicie narzędzia", () => {
   assert.equal(validateImagePrompt({ prompt: "Wygeneruj wnętrze salonu z kuchnią i jadalnia o powierzchni około 50 m2 o wysokości sufitu około 2,6m w stylu trochę paryskiej kamienicy, trochę mid-century modern a trochę w stylu willi modernistycznych z lat 20" }).success, true);
+});
+
+const failedImage = { type: "tool-generujObraz", toolCallId: "failed", state: "output-error", input: { prompt: "Wnętrze" }, errorText: imageFailureMessages.input };
+const successfulImage = { type: "tool-generujObraz", toolCallId: "success", state: "output-available", input: { prompt: "Wnętrze" }, output: {
+  url: "data:image/png;base64,AAAA", mediaType: "image/png", modelId: "test/image-model",
+} };
+
+test("przejściowy błąd narzędzia nie jest pokazywany jako wynik w trakcie pracy agenta", () => {
+  assert.equal(imageFailureToShow([failedImage], 0, true), null);
+  assert.equal(imageFailureToShow([failedImage], 0, false), imageFailureMessages.input);
+});
+
+test("udana ponowna próba usuwa wcześniejszy błąd z widoku odpowiedzi", () => {
+  assert.equal(imageFailureToShow([failedImage, successfulImage], 0, false), null);
+  assert.equal(imageFailureToShow([failedImage, successfulImage], 0, true), null);
+});
+
+test("późniejsza nieudana operacja nadal pokazuje błąd, jeśli nie została naprawiona", () => {
+  assert.equal(imageFailureToShow([successfulImage, failedImage], 1, false), imageFailureMessages.input);
 });
