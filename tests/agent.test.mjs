@@ -70,7 +70,7 @@ test("narzędzie obrazu przekazuje plik do UI i tylko krótki tekst do modelu", 
     if (body.modalities) {
       imageCalls++;
       assert.equal(body.model, "google/gemini-nano-banana-2.1");
-      assert.deepEqual(body.messages, [{ role: "user", content: "Kot w Studio Nova" }]);
+      assert.deepEqual(body.messages, [{ role: "user", content: "Kot obok opakowania" }]);
       return Response.json({ model: "test/actual-image-model", choices: [{ message: {
         images: [{ image_url: { url: imageUrl } }],
       } }] });
@@ -78,10 +78,10 @@ test("narzędzie obrazu przekazuje plik do UI i tylko krótki tekst do modelu", 
     modelRequests.push(body);
     assert.ok(!JSON.stringify(body.messages).includes(png), "Żaden krok nie może zawierać pliku wygenerowanego obrazu");
     return modelRequests.length === 1
-      ? streamReply({ name: "generujObraz", input: { prompt: "Kot w Studio Nova" } }) : streamReply();
+      ? streamReply({ name: "generujObraz", input: { prompt: "Kot obok opakowania" } }) : streamReply();
   };
   const chat = client(browserRequests);
-  await chat.sendMessage({ text: "Wygeneruj obraz: Kot w Studio Nova" });
+  await chat.sendMessage({ text: "Wygeneruj obraz: Kot obok opakowania" });
   assert.equal(chat.status, "ready");
   assert.equal(imageCalls, 1);
   assert.equal(modelRequests.length, 2);

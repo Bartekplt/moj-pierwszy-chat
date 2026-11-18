@@ -1,4 +1,4 @@
-import { studioNovaInstructions } from "./studio-nova.ts";
+import { assistantInstructions } from "./assistant-persona.ts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { aktualnyCzas } from "./chat-tools.ts";
 import { createImageTool } from "./image-generation.ts";
@@ -110,7 +110,7 @@ export async function chatResponse(request: Request, body: unknown) {
       model: trackedModel,
       tools,
       stopWhen: isStepCount(5),
-      instructions: `${studioNovaInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`,
+      instructions: `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`,
       // Do modelu trafiają tekst, zdjęcia użytkownika i krótkie potwierdzenia obrazów.
       messages: await convertToModelMessages(messages.map(({ id, role, parts }) => ({
         id, role, parts: parts.flatMap((part): ChatMessage["parts"] => {

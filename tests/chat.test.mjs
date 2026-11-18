@@ -113,8 +113,9 @@ test("walidacja, brak konfiguracji, strumieniowanie i historia bez wywołań API
     assert.deepEqual(calls[1].messages.map(({ role }) => role), ["system", "user", "assistant", "user"]);
     assert.deepEqual(calls[0].messages[0].content, calls[1].messages[0].content);
     const instructions = calls[1].messages[0].content.map(({ text }) => text).join("");
-    assert.match(instructions, /Jesteś asystentem Studio Nova/);
-    assert.match(instructions, /45 minut.*150 zł brutto/);
+    assert.match(instructions, /Jesteś osobistym asystentem użytkownika/);
+    assert.match(instructions, /suplementami diety dla ludzi i zwierząt/);
+    assert.match(instructions, /Przy poszukiwaniu dostawców użyj web_search/);
     assert.equal(calls[0].messages[1].content, "Mam na imię Ola.");
     assert.match(JSON.stringify(calls[1].messages), /Mam na imię Ola/);
     assert.match(JSON.stringify(calls[1].messages), /Pamiętam/);

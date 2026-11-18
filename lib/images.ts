@@ -1,3 +1,6 @@
+import type { UIMessage } from "ai";
+import { publicImageError } from "./image-errors.ts";
+
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 export const IMAGE_INPUT_ERROR = "Wybierz zdjęcie JPG, PNG lub WebP o rozmiarze do 4 MB.";
@@ -25,9 +28,9 @@ export function imageFailureToShow(parts: UIMessage["parts"], index: number, inP
 }
 
 export const IMAGE_PROMPTS = [
-  { label: "Powitanie w Studio Nova", prompt: "Przyjazna grafika powitalna dla klientów Studio Nova: jasne biurko, laptop i roślina, spokojne kolory, minimalistyczna ilustracja, bez napisów." },
-  { label: "Konsultacja online", prompt: "Ilustracja konsultacji online w Studio Nova: dwie osoby rozmawiają przez wideopołączenie na laptopie, ciepła i profesjonalna atmosfera, jasne tło, bez napisów." },
-  { label: "Podziękowanie dla klienta", prompt: "Elegancka grafika z podziękowaniem dla klienta Studio Nova: otwarta koperta i delikatny motyw roślinny, ciepłe pastelowe kolory, dużo wolnej przestrzeni, bez napisów." },
+  { label: "Zdjęcie produktowe", prompt: "Zdjęcie katalogowe opakowania suplementu dla ludzi: biała butelka bez nadruku, neutralne tło, miękkie światło studyjne, produkt na środku kadru." },
+  { label: "Grafika dla opiekunów zwierząt", prompt: "Pozioma grafika do sklepu zoologicznego: pies i kot w jasnym domu obok neutralnego opakowania produktu, naturalne światło, wolne miejsce po lewej stronie na nagłówek, bez napisów." },
+  { label: "Baner nowości w sklepie", prompt: "Szeroki baner dla sklepu z suplementami: różne neutralne opakowania na jasnych podestach, subtelne cienie, miejsce na hasło po prawej stronie, bez napisów i logotypów." },
 ] as const;
 
 export function photoSelectionError(file: { name: string; type: string; size: number }) {
@@ -50,6 +53,3 @@ export function matchesImageType(bytes: Uint8Array, mediaType: string) {
   }
   return false;
 }
-import type { UIMessage } from "ai";
-import { publicImageError } from "./image-errors.ts";
-

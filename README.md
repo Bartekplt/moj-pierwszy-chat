@@ -34,7 +34,14 @@ kontynuować pracę z narzędziami, strumień dopisuje „Przerwałem po 5 kroka
 Normalne ukończenie odpowiedzi w piątym kroku nie jest oznaczane jako przerwanie.
 Przy zadaniu złożonym instrukcja nakazuje najpierw zebrać informacje, potem tworzyć.
 
-## Analiza wiadomości Studio Nova
+## Asystent do codziennej pracy
+
+Zwykły czat pomaga w codziennej pracy i odpowiada też na pytania ogólne. W pracy
+nad sklepem z suplementami dla ludzi i zwierząt porównuje oferty, liczy marżę na
+podstawie podanych danych, pisze teksty i wyszukuje dostawców z linkami do źródeł.
+Do grafiki można użyć własnego opisu albo jednej z trzech podpowiedzi pod czatem.
+
+## Analiza wiadomości klienta sklepu
 
 Po zalogowaniu wybierz „Analiza JSON”. Zwykły czat nadal ma osobną historię
 i strumieniuje odpowiedzi. Analiza przyjmuje pojedynczą wiadomość i pokazuje dopiero
@@ -71,13 +78,12 @@ Testy nie wywołują modelu ani nie wczytują prywatnych plików `.env`.
 
 Pierwszą prawdziwą analizę uruchom samodzielnie na `http://localhost:3000`:
 
-- „Proszę o ofertę dla 8 osób.” → `sales`, `normal`, pytanie o zakres, `needs_review=true`.
+- „Czy dostanę ofertę hurtową na suplementy dla psów?” → `sales`, `normal`,
+  pytanie o produkty i liczbę opakowań, `needs_review=true`.
 - „Nie mogę się zalogować.” → `support`, `normal`, prośba o komunikat błędu, `needs_review=true`.
-- „Opłaciłem konsultację, zaczyna się za 30 minut, ale nie mogę wejść na spotkanie.”
-  → `support`, `high`, skierowanie do pracownika, `needs_review=true`.
+- „Zamówienie utknęło. Odbieram je za godzinę i potrzebuję pilnej pomocy.”
+  → `support`, `high`, prośba o numer zamówienia, `needs_review=true`.
 - „Proszę o zwrot płatności.” → `billing`, `normal`, bez potwierdzania zwrotu, `needs_review=true`.
-- „Ile trwa i kosztuje konsultacja online?” → `sales`, `normal`, 45 minut i 150 zł brutto,
-  `needs_review=false`; wynik nadal musi być oznaczony jako szkic.
 
 Dokumentacja sprawdzona przed zmianą API:
 [AI SDK — structured data](https://ai-sdk.dev/docs/ai-sdk-core/generating-structured-data),

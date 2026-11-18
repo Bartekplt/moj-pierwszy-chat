@@ -4,9 +4,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { validateAnalysis, type Analysis } from "../lib/analysis";
 
 const categoryLabels = {
-  sales: "sales — oferta i cena",
-  support: "support — problem techniczny",
-  billing: "billing — płatność lub zwrot",
+  sales: "sales — produkt i oferta",
+  support: "support — konto, zamówienie lub dostawa",
+  billing: "billing — płatność, faktura lub zwrot",
   unknown: "unknown — nierozpoznana sprawa",
 };
 
@@ -75,8 +75,8 @@ export default function MessageAnalysis({ leaving }: { leaving: boolean }) {
   }
 
   return (
-    <section aria-label="Analiza wiadomości Studio Nova">
-      <p className="status">Przygotuj szkic odpowiedzi na jedną wiadomość klienta. Nic nie zostanie wysłane ani zarezerwowane.</p>
+    <section aria-label="Analiza wiadomości klienta sklepu">
+      <p className="status">Wklej wiadomość klienta sklepu, aby określić kategorię i priorytet oraz przygotować szkic odpowiedzi.</p>
       <form onSubmit={analyze}>
         <label htmlFor="analysis-message">Wiadomość klienta</label>
         <textarea
@@ -104,7 +104,7 @@ export default function MessageAnalysis({ leaving }: { leaving: boolean }) {
           </dl>
           <h3>Szkic odpowiedzi</h3>
           <p className="draft">{result.draft}</p>
-          <p className="status">To wyłącznie szkic, także gdy needs_review = false. Nie wysłano wiadomości, nie dokonano rezerwacji ani operacji płatniczej.</p>
+          <p className="status">Szkic do wykorzystania w obsłudze klienta, także gdy needs_review = false.</p>
         </section>
       )}
     </section>

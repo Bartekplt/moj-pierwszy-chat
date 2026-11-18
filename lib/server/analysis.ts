@@ -4,7 +4,7 @@ import {
   NoOutputGeneratedError, Output,
 } from "ai";
 import { validateAnalysis, type Analysis } from "../analysis.ts";
-import { studioNovaContext } from "./studio-nova.ts";
+import { customerMessageContext } from "./assistant-persona.ts";
 
 export const analysisSchema = jsonSchema<Analysis>({
   type: "object",
@@ -18,22 +18,25 @@ export const analysisSchema = jsonSchema<Analysis>({
   additionalProperties: false,
 }, { validate: validateAnalysis });
 
-const instructions = `${studioNovaContext}
+const instructions = `${customerMessageContext}
 
 Analizujesz jedną wiadomość klienta. Zwróć wynik zgodny z podanym schematem.
-category: sales = oferta i cena; support = problem techniczny;
-billing = płatność lub zwrot; unknown = brak rozpoznanej sprawy.
-priority: high wyłącznie przy blokadzie opłaconego spotkania zaczynającego się
-w ciągu godziny. Wszystkie te warunki muszą wynikać z wiadomości.
-W pozostałych przypadkach priority = normal. Nie zakładaj opłacenia ani bliskiego terminu.
+category: sales = pytanie przed zakupem o produkt, dostępność, cenę lub ofertę;
+support = problem z kontem, zamówieniem, dostawą lub otrzymanym produktem;
+billing = płatność, faktura lub zwrot pieniędzy; unknown = brak rozpoznanej sprawy.
+priority: high, jeśli klient opisuje niepokojące objawy u człowieka lub zwierzęcia po
+użyciu produktu albo wyraźnie zgłasza zablokowane zamówienie wymagające działania
+w ciągu 24 godzin. W pozostałych przypadkach ustaw normal. Nie zakładaj pilnego terminu.
 needs_review = true przy braku danych lub konieczności decyzji pracownika.
+Przy zgłoszeniu objawów ustaw needs_review = true i przygotuj szkic, który potwierdza
+otrzymanie zgłoszenia, bez przypisywania przyczyn ani udzielania porad o dawkowaniu.
 draft: krótki, uprzejmy szkic odpowiedzi po polsku. Każdy wynik jest wyłącznie
 szkicem, także gdy needs_review = false. Nie wykonujesz żadnych działań.
 Jeśli sprawa jest niejasna, poproś o doprecyzowanie i ustaw needs_review = true.
 
 Przykłady (wzorce, nie historia bieżącej rozmowy):
-Klient: Proszę o ofertę dla 8 osób.
-Wynik: {"category":"sales","priority":"normal","draft":"Dziękuję za wiadomość. Czy chodzi o osiem indywidualnych konsultacji, czy o spotkanie grupowe? Po doprecyzowaniu przekażemy sprawę pracownikowi.","needs_review":true}
+Klient: Czy dostanę ofertę hurtową na suplementy dla psów?
+Wynik: {"category":"sales","priority":"normal","draft":"Dziękuję za wiadomość. Proszę podać interesujące produkty i liczbę opakowań, żebyśmy mogli sprawdzić warunki oferty.","needs_review":true}
 Klient: Nie mogę się zalogować.
 Wynik: {"category":"support","priority":"normal","draft":"Napisz proszę, jaki komunikat pojawia się podczas logowania.","needs_review":true}`;
 
@@ -124,7 +127,7 @@ export async function analyzeMessage({ message, model, apiKey, signal }: {
       }),
       instructions,
       messages: [{ role: "user", content: message }],
-      output: Output.object({ name: "studio_nova_analysis", schema: analysisSchema }),
+      output: Output.object({ name: "customer_message_analysis", schema: analysisSchema }),
       abortSignal,
       maxRetries: 0,
     });
