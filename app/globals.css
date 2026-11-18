@@ -49,6 +49,11 @@ button.secondary { background: #e2e8f3; color: #172033; }
 .image-actions small { width: 100%; color: #465674; }
 .image-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .image-suggestions small { width: 100%; color: #465674; }
+.sheet-preview { margin-top: 12px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+.sheet-preview p { margin: 6px 0; }
+.sheet-table { max-height: 210px; overflow: auto; margin-top: 8px; }
+.sheet-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.sheet-table th, .sheet-table td { padding: 6px 8px; border: 1px solid #cbd5e1; overflow-wrap: anywhere; }
 button.prompt-suggestion { padding: 8px 12px; border-radius: 18px; font-size: 13px; font-weight: 400; }
 .download-image { display: inline-block; margin-top: 10px; padding: 8px 14px; border-radius: 8px; background: #2454cc; color: white; font-size: 14px; text-decoration: none; white-space: normal; }
 .download-image:focus-visible { outline: 3px solid #799df8; outline-offset: 3px; }

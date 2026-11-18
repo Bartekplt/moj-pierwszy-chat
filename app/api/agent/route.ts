@@ -1,6 +1,7 @@
 import { hasRequestSession, isSameOrigin } from "../../../lib/server/session.ts";
 import { chatResponse } from "../../../lib/server/agent-chat.ts";
 import { analysisResponse } from "../../../lib/server/agent-analyze.ts";
+import { googleWriteResponse } from "../../../lib/server/google-sheets.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -16,9 +17,10 @@ export async function POST(request: Request) {
   try { body = await request.json(); }
   catch { return Response.json({ error: "Nieprawidłowe dane JSON." }, { status: 400 }); }
   if (!body || typeof body !== "object" || Array.isArray(body) || !("mode" in body)) {
-    return Response.json({ error: "Wybierz tryb: chat albo analyze." }, { status: 400 });
+    return Response.json({ error: "Nie wskazano trybu agenta." }, { status: 400 });
   }
   if (body.mode === "chat") return chatResponse(request, body);
   if (body.mode === "analyze") return analysisResponse(request, body);
-  return Response.json({ error: "Nieznany tryb. Wybierz chat albo analyze." }, { status: 400 });
+  if (body.mode === "sheet-write") return googleWriteResponse(request, body);
+  return Response.json({ error: "Nieznany tryb agenta." }, { status: 400 });
 }

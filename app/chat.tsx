@@ -5,8 +5,10 @@ import { DefaultChatTransport, type FileUIPart } from "ai";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import MessageAnalysis from "./analysis";
 import GeneratedImageView from "./generated-image";
+import SpreadsheetResult from "./spreadsheet-result";
 import { chatToolLabels, prepareAgentMessages, type ChatMessage } from "../lib/chat";
 import { IMAGE_PROMPTS, imageFailureToShow, isGeneratedImage, matchesImageType, photoSelectionError } from "../lib/images";
+import { DOCUMENT_INPUT_ERROR, DOCUMENT_LIMIT, DOCUMENT_REQUEST_ERROR, DOCUMENT_TYPES, documentType, matchesDocumentType } from "../lib/documents";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -14,6 +16,9 @@ const transport = new DefaultChatTransport<ChatMessage>({
     body: { mode: "chat", messages: prepareAgentMessages(messages) },
   }),
   fetch: async (url, options) => {
+    const body = options?.body;
+    if (typeof body === "string" && DOCUMENT_TYPES.some((type) => body.includes(`data:${type};base64,`)) &&
+        new Blob([body]).size > 4_400_000) throw new Error(DOCUMENT_REQUEST_ERROR);
     const response = await fetch(url, options);
     if (response.status === 401) window.location.replace("/");
     return response;
@@ -25,27 +30,29 @@ export default function Chat() {
   const [message, setMessage] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [logoutError, setLogoutError] = useState("");
-  const [photo, setPhoto] = useState<FileUIPart>();
+  const [attachment, setAttachment] = useState<FileUIPart>();
   const [imageError, setImageError] = useState("");
-  const [readingPhoto, setReadingPhoto] = useState(false);
+  const [readingAttachment, setReadingAttachment] = useState(false);
   const [imageRequested, setGenerating] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const documentInput = useRef<HTMLInputElement>(null);
   const requestPending = useRef(false);
   const { messages, sendMessage: sendChatMessage, status, error, stop, setMessages } = useChat<ChatMessage>({ transport });
   const generating = imageRequested || (status === "streaming" && messages.at(-1)?.parts.some((part) =>
     (part.type === "tool-generujObraz" || (part.type === "dynamic-tool" && part.toolName === "generujObraz")) &&
     (part.state === "input-streaming" || part.state === "input-available"),
   )) === true;
-  const waiting = status === "submitted" || status === "streaming" || generating || readingPhoto;
+  const waiting = status === "submitted" || status === "streaming" || generating || readingAttachment;
   const conversation = useRef<HTMLElement>(null);
 
   useEffect(() => {
     conversation.current?.scrollTo({ top: conversation.current.scrollHeight });
   }, [messages, status, generating]);
 
-  const errorMessage = error?.message.startsWith("Brak konfiguracji:")
+  const errorMessage = error && (error.message.startsWith("Brak konfiguracji:") ||
+      [DOCUMENT_REQUEST_ERROR, DOCUMENT_INPUT_ERROR].includes(error.message))
     ? error.message
-    : messages.some((item) => item.parts.some((part) => part.type === "file" && item.role === "user"))
+    : messages.some((item) => item.parts.some((part) => part.type === "file" && part.mediaType.startsWith("image/") && item.role === "user"))
     ? "Nie udało się przeanalizować zdjęcia. Model może być niedostępny lub nie obsługiwać obrazów. Sprawdź konfigurację modelu rozmowy."
     : "Nie udało się uzyskać odpowiedzi. Sprawdź klucz, identyfikator modelu i środki w OpenRouter, a następnie spróbuj ponownie.";
 
@@ -68,45 +75,46 @@ export default function Chat() {
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = message.trim();
-    if ((!text && !photo) || waiting || leaving || requestPending.current) return;
+    if ((!text && !attachment) || waiting || leaving || requestPending.current) return;
     requestPending.current = true;
     setImageError("");
-    void sendChatMessage({ text: text || "Opisz to zdjęcie.", files: photo ? [photo] : undefined })
+    const defaultText = attachment?.mediaType.startsWith("image/") ? "Opisz to zdjęcie." : "Podsumuj załączony dokument.";
+    void sendChatMessage({ text: text || defaultText, files: attachment ? [attachment] : undefined })
       .finally(() => { requestPending.current = false; });
     setMessage("");
-    setPhoto(undefined);
-    if (fileInput.current) fileInput.current.value = "";
+    setAttachment(undefined);
   }
 
-  async function selectPhoto(file: File | undefined) {
+  async function selectAttachment(file: File | undefined, document: boolean) {
     if (waiting || leaving || requestPending.current) return;
-    setImageError("");
-    setPhoto(undefined);
     if (!file) return;
-    const validationError = photoSelectionError(file);
-    if (validationError) {
-      setImageError(validationError);
-      if (fileInput.current) fileInput.current.value = "";
+    setImageError("");
+    const mediaType = document ? documentType(file.name) : file.type;
+    const validationError = document
+      ? (!mediaType || file.name.length > 200 || /[\x00-\x1f\x7f]/.test(file.name) ||
+        !file.size || file.size > DOCUMENT_LIMIT ? DOCUMENT_INPUT_ERROR : null)
+      : photoSelectionError(file);
+    if (validationError || !mediaType) {
+      setImageError(validationError ?? DOCUMENT_INPUT_ERROR);
       return;
     }
-    setReadingPhoto(true);
+    setReadingAttachment(true);
     try {
       const signature = new Uint8Array(await file.slice(0, 12).arrayBuffer());
-      if (!matchesImageType(signature, file.type)) {
-        setImageError("Ten plik nie jest poprawnym zdjęciem JPG, PNG lub WebP. Wybierz inne zdjęcie.");
-        if (fileInput.current) fileInput.current.value = "";
+      if (!(document ? matchesDocumentType(signature, mediaType) : matchesImageType(signature, mediaType))) {
+        setImageError(document ? DOCUMENT_INPUT_ERROR : "Ten plik nie jest poprawnym zdjęciem JPG, PNG lub WebP. Wybierz inne zdjęcie.");
         return;
       }
       const url = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Nie udało się odczytać zdjęcia."));
-        reader.readAsDataURL(file);
+        reader.onerror = () => reject(new Error("Nie udało się odczytać pliku."));
+        reader.readAsDataURL(file.slice(0, file.size, mediaType));
       });
-      setPhoto({ type: "file", url, mediaType: file.type, filename: file.name });
+      setAttachment({ type: "file", url, mediaType, filename: file.name });
     } catch {
-      setImageError("Nie udało się odczytać zdjęcia. Wybierz je ponownie.");
-    } finally { setReadingPhoto(false); }
+      setImageError("Nie udało się odczytać pliku. Wybierz go ponownie.");
+    } finally { setReadingAttachment(false); }
   }
 
   async function generatePicture() {
@@ -170,6 +178,10 @@ export default function Chat() {
               if (part.type === "file" && part.mediaType.startsWith("image/")) return (
                 <img key={index} className="photo-thumbnail" src={part.url} alt={part.filename || "Zdjęcie w rozmowie"} />
               );
+              if (part.type === "file" && DOCUMENT_TYPES.includes(part.mediaType)) return <p className="status" key={index}>📎 {part.filename}</p>;
+              if (part.type === "tool-arkusze" || (part.type === "dynamic-tool" && part.toolName === "arkusze")) {
+                if (part.state === "output-available") return <SpreadsheetResult key={part.toolCallId} output={part.output} disabled={waiting || leaving} />;
+              }
               return null;
             })}
             {item.role === "assistant" && item.metadata?.vision && (
@@ -203,7 +215,7 @@ export default function Chat() {
       </section>
       {waiting && (
         <p className="status" role="status">
-          {generating ? "Generuję obraz…" : readingPhoto ? "Wczytuję zdjęcie…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
+          {generating ? "Generuję obraz…" : readingAttachment ? "Wczytuję załącznik…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
         </p>
       )}
       {error && <p className="error" role="alert">{errorMessage}</p>}
@@ -220,7 +232,7 @@ export default function Chat() {
             autoComplete="off"
             disabled={waiting || leaving}
           />
-          <button type="submit" disabled={waiting || leaving || (!message.trim() && !photo)}>
+          <button type="submit" disabled={waiting || leaving || (!message.trim() && !attachment)}>
             {waiting ? "Czekaj…" : "Wyślij"}
           </button>
         </div>
@@ -238,18 +250,27 @@ export default function Chat() {
         </div>
         <div className="image-actions">
           <input hidden type="file" ref={fileInput} accept="image/jpeg,image/png,image/webp"
-            onChange={(event) => void selectPhoto(event.target.files?.[0])} disabled={waiting || leaving}
+            onChange={(event) => {
+              void selectAttachment(event.target.files?.[0], false);
+              event.target.value = "";
+            }} disabled={waiting || leaving}
             aria-label="Wybierz zdjęcie JPG, PNG lub WebP do 4 MB" />
           <button type="button" className="secondary" disabled={waiting || leaving} onClick={() => fileInput.current?.click()}>Dodaj zdjęcie</button>
-          <button type="button" className="secondary" disabled={waiting || leaving || !message.trim() || !!photo}
+          <input hidden type="file" ref={documentInput} accept=".pdf,.xlsx"
+            onChange={(event) => {
+              void selectAttachment(event.target.files?.[0], true);
+              event.target.value = "";
+            }} disabled={waiting || leaving} aria-label="Wybierz PDF lub XLSX do 2 MB" />
+          <button type="button" className="secondary" disabled={waiting || leaving} onClick={() => documentInput.current?.click()}>Dodaj dokument</button>
+          <button type="button" className="secondary" disabled={waiting || leaving || !message.trim() || !!attachment}
             onClick={() => void generatePicture()}>Wygeneruj obraz</button>
-          <small>Zdjęcie: JPG, PNG, WebP do 4 MB. Opis obrazu: do 500 znaków.</small>
+          <small>Zdjęcie: JPG, PNG, WebP do 4 MB. Dokument: PDF lub XLSX do 2 MB. Opis obrazu: do 500 znaków.</small>
         </div>
-        {photo && <div className="photo-preview">
-          <img className="photo-thumbnail" src={photo.url} alt="Wybrane zdjęcie" />
-          <button type="button" className="secondary" disabled={waiting || leaving} onClick={() => {
-            setPhoto(undefined); if (fileInput.current) fileInput.current.value = "";
-          }}>Usuń zdjęcie</button>
+        {attachment && <div className="photo-preview">
+          {attachment.mediaType.startsWith("image/")
+            ? <img className="photo-thumbnail" src={attachment.url} alt="Wybrane zdjęcie" />
+            : <span>📎 {attachment.filename}</span>}
+          <button type="button" className="secondary" disabled={waiting || leaving} onClick={() => setAttachment(undefined)}>Usuń załącznik</button>
         </div>}
       </form>
       </>}

@@ -59,10 +59,22 @@ export function verifySession(token: string | undefined, now = Math.floor(Date.n
   }
 }
 
-export function hasRequestSession(request: Request) {
+function requestSessionToken(request: Request) {
   const cookies = (request.headers.get("cookie") ?? "").split(";");
   const matches = cookies.map((cookie) => cookie.trim()).filter((cookie) => cookie.startsWith(`${SESSION_COOKIE}=`));
-  return matches.length === 1 && verifySession(matches[0].slice(SESSION_COOKIE.length + 1));
+  return matches.length === 1 ? matches[0].slice(SESSION_COOKIE.length + 1) : undefined;
+}
+
+export function hasRequestSession(request: Request) {
+  return verifySession(requestSessionToken(request));
+}
+
+export function signSheetConfirmation(request: Request, payload: string) {
+  const config = configuration();
+  const session = requestSessionToken(request);
+  if (!config || !session || !verifySession(session)) throw new Error(AUTH_CONFIGURATION_ERROR);
+  return createHmac("sha256", config.secret).update("sheet-confirmation\0").update(session)
+    .update("\0").update(payload).digest();
 }
 
 export function sessionCookie(token: string, remove = false) {

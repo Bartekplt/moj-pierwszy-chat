@@ -4,9 +4,14 @@ import { aktualnyCzas } from "./chat-tools.ts";
 import { createImageTool } from "./image-generation.ts";
 import { ImageGenerationError } from "./image-errors.ts";
 import { imageFailureMessages } from "../image-errors.ts";
-import type { ChatMessage, ChatToolName } from "../chat.ts";
+import { chatToolLabels, type ChatMessage, type ChatToolName } from "../chat.ts";
 import { isValidPhoto } from "./image-input.ts";
-import { IMAGE_INPUT_ERROR } from "../images.ts";
+import { IMAGE_INPUT_ERROR, IMAGE_TYPES } from "../images.ts";
+import { DOCUMENT_INPUT_ERROR, DOCUMENT_TYPES, PDF_TYPE, XLSX_TYPE } from "../documents.ts";
+import { googleIds } from "../spreadsheets.ts";
+import { decodeDocument, type ChatDocument } from "./document-input.ts";
+import { createPdfTool } from "./pdf-tool.ts";
+import { createSpreadsheetTool } from "./spreadsheet-tool.ts";
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
@@ -24,6 +29,7 @@ const responseError =
 
 export async function chatResponse(request: Request, body: unknown) {
   let messages: ChatMessage[];
+  const documents = new Map<string, ChatDocument>();
 
   try {
     if (!body || typeof body !== "object" || !("messages" in body)) {
@@ -31,8 +37,17 @@ export async function chatResponse(request: Request, body: unknown) {
     }
     messages = await validateUIMessages<ChatMessage>({ messages: body.messages });
     for (const message of messages) {
-      const photos = message.parts.filter((part) => part.type === "file");
-      if (photos.length > 1 || photos.some((part) => message.role !== "user" || !isValidPhoto(part))) {
+      const files = message.parts.filter((part) => part.type === "file");
+      if (files.length > 1 || (files.length && message.role !== "user")) {
+        return new Response(IMAGE_INPUT_ERROR, { status: 400 });
+      }
+      const file = files[0];
+      if (!file) continue;
+      if (DOCUMENT_TYPES.includes(file.mediaType)) {
+        const document = decodeDocument(file);
+        if (!document) return new Response(DOCUMENT_INPUT_ERROR, { status: 400 });
+        documents.set(file.mediaType, document);
+      } else if (!isValidPhoto(file)) {
         return new Response(IMAGE_INPUT_ERROR, { status: 400 });
       }
     }
@@ -45,8 +60,9 @@ export async function chatResponse(request: Request, body: unknown) {
           !["text", "step-start"].includes(part.type) &&
           !(message.role === "user" && part.type === "file") &&
           !(message.role === "assistant" && (
-            ["source-url", "tool-aktualnyCzas", "tool-web_search", "tool-generujObraz"].includes(part.type) ||
-            (part.type === "dynamic-tool" && ["aktualnyCzas", "web_search", "generujObraz"].includes(part.toolName))
+            part.type === "source-url" ||
+            (part.type.startsWith("tool-") && Object.hasOwn(chatToolLabels, part.type.slice(5))) ||
+            (part.type === "dynamic-tool" && Object.hasOwn(chatToolLabels, part.toolName))
           )),
         ),
       ) ||
@@ -59,7 +75,7 @@ export async function chatResponse(request: Request, body: unknown) {
     return new Response("Nieprawidłowa rozmowa. Wpisz niepustą wiadomość.", { status: 400 });
   }
 
-  const vision = messages.some((message) => message.parts.some((part) => part.type === "file"));
+  const vision = messages.some((message) => message.parts.some((part) => part.type === "file" && IMAGE_TYPES.includes(part.mediaType)));
   const currentResponseError = vision
     ? "Nie udało się przeanalizować zdjęcia. Model rozmowy może być niedostępny albo nie obsługiwać obrazów. Spróbuj ponownie lub wybierz w konfiguracji model z obsługą zdjęć."
     : responseError;
@@ -81,10 +97,15 @@ export async function chatResponse(request: Request, body: unknown) {
 
   try {
     const openrouter = createOpenRouter({ apiKey });
+    const sheetLinks = googleIds(messages.flatMap(({ role, parts }) =>
+      role === "user" ? parts.flatMap((part) => part.type === "text" ? [part.text] : []) : [],
+    ));
     const tools = {
       web_search: openrouter.tools.webSearch({ maxResults: 3, engine: "native" }),
       aktualnyCzas,
       generujObraz: createImageTool(apiKey!, request.signal),
+      czytajPdf: createPdfTool(documents.get(PDF_TYPE)),
+      arkusze: createSpreadsheetTool(request, documents.get(XLSX_TYPE), sheetLinks),
     };
     const usedTools: ChatToolName[] = [];
     const seenToolCalls = new Set<string>();
@@ -114,7 +135,11 @@ export async function chatResponse(request: Request, body: unknown) {
       // Do modelu trafiają tekst, zdjęcia użytkownika i krótkie potwierdzenia obrazów.
       messages: await convertToModelMessages(messages.map(({ id, role, parts }) => ({
         id, role, parts: parts.flatMap((part): ChatMessage["parts"] => {
-          if (part.type === "text" || part.type === "file") return [part];
+          if (part.type === "text") return [part];
+          if (part.type === "file") {
+            if (IMAGE_TYPES.includes(part.mediaType)) return [part];
+            return [{ type: "text", text: `Użytkownik załączył dokument: ${part.filename}` }];
+          }
           if ((part.type === "tool-generujObraz" || (part.type === "dynamic-tool" && part.toolName === "generujObraz")) &&
             part.state === "output-available") return [{ type: "text", text: "obraz wygenerowany" }];
           return [];
@@ -181,15 +206,15 @@ export async function chatResponse(request: Request, body: unknown) {
             }
             return { retrievedAt: new Date().toISOString(), usedTools: [...usedTools] };
           }
-          if (part.type === "tool-call" && !part.invalid &&
-            (part.toolName === "aktualnyCzas" || part.toolName === "web_search" || part.toolName === "generujObraz")) {
+          if (part.type === "tool-call" && !part.invalid && Object.hasOwn(chatToolLabels, part.toolName)) {
+            const name = part.toolName as ChatToolName;
             if (seenToolCalls.has(part.toolCallId)) return;
             seenToolCalls.add(part.toolCallId);
             // Źródło i jawne wywołanie tej samej operacji nie tworzą dwóch etykiet.
             if (part.toolName === "web_search" && nativeSearchPending) {
               nativeSearchPending = false;
             } else {
-              usedTools.push(part.toolName);
+              usedTools.push(name);
             }
             if (part.toolName === "web_search") webSearchInStep = true;
             return { usedTools: [...usedTools] };

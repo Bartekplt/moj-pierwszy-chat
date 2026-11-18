@@ -5,10 +5,12 @@
 `POST /api/agent` najpierw sprawdza sesję i Origin, następnie odczytuje pole `mode`:
 
 - `{"mode":"chat","messages":[...]}` — rozmowa strumieniowana przez `streamText`,
-  z narzędziami `web_search`, `aktualnyCzas` i `generujObraz`. Limit to `isStepCount(5)`.
-  Zdjęcia użytkownika są częściami `file` (JPG, PNG, WebP, do 4 MB).
+  z narzędziami `web_search`, `aktualnyCzas`, `generujObraz`, `czytajPdf` i `arkusze`.
+  Limit to `isStepCount(5)`. Zdjęcia i dokumenty są częściami `file`.
 - `{"mode":"analyze","message":"treść wiadomości klienta"}` — kompletny wynik JSON,
   generowany przez `generateText` z `Output.object` i walidowany po stronie serwera.
+- `{"mode":"sheet-write","confirmation":"…"}` — zapis w Google Sheets po zatwierdzeniu
+  podglądu przez użytkownika.
 
 `generujObraz` przyjmuje opis do 500 znaków i używa Nano Banana 2.1.
 Pełny wynik narzędzia trafia do przeglądarki; `toModelOutput` przekazuje modelowi
@@ -40,6 +42,38 @@ Zwykły czat pomaga w codziennej pracy i odpowiada też na pytania ogólne. W pr
 nad sklepem z suplementami dla ludzi i zwierząt porównuje oferty, liczy marżę na
 podstawie podanych danych, pisze teksty i wyszukuje dostawców z linkami do źródeł.
 Do grafiki można użyć własnego opisu albo jednej z trzech podpowiedzi pod czatem.
+
+## PDF i arkusze
+
+W zwykłym czacie kliknij „Dodaj dokument”, wybierz PDF lub XLSX (do 2 MB), wpisz
+pytanie i kliknij „Wyślij”. Każde narzędzie korzysta z ostatniego załączonego pliku
+swojego typu. Odczytane fragmenty trafiają do skonfigurowanego modelu przez
+OpenRouter. Cały plik nie jest wysyłany do modelu.
+
+- **PDF** — odczyt warstwy tekstowej z numerami stron, do ośmiu stron na wywołanie.
+  Skan bez warstwy tekstowej wymaga osobnego OCR.
+- **Excel** — lista kart, odczyt do 150 komórek i zmiana do 50 komórek na wywołanie.
+  Wpisywane są liczby, tekst lub wartości logiczne. Czat wyświetla „Pobierz zmieniony
+  XLSX”. Oryginalny plik pozostaje u użytkownika. Edycja jest przeznaczona dla zwykłych
+  tabel. Pliki z wykresami, tabelami przestawnymi lub innymi niewspieranymi elementami
+  można odczytywać, a ich edycja może zostać odrzucona.
+- **Google Sheets** — wklej link do udostępnionego arkusza i zapytaj o kartę i zakres,
+  np. „odczytaj Zakupy!A1:D10”. Przy edycji sprawdź kartę, zakres i wartości w podglądzie,
+  a potem kliknij „Zapisz w Google Sheets”. Podgląd jest ważny pięć minut. Aplikacja
+  sprawdza przed zapisem, czy odczytane wartości uległy zmianie. Zapis zawiera wartości
+  komórek, bez wprowadzania formuł ani zmiany formatowania.
+
+### Podłączenie Google Sheets
+
+1. W Google Cloud włącz Google Sheets API i skonfiguruj dedykowane
+   [konto usługi](https://developers.google.com/identity/protocols/oauth2/service-account).
+2. Udostępnij temu kontu tylko wskazany arkusz jako przeglądający lub edytujący.
+   Osoby zalogowane w tym czacie mogą korzystać z udostępnionych i dopuszczonych arkuszy.
+3. Ustaw na serwerze `GOOGLE_SHEETS_CLIENT_EMAIL` i `GOOGLE_SHEETS_PRIVATE_KEY`
+   z danych konta usługi oraz `GOOGLE_SHEETS_ALLOWED_IDS` z identyfikatorami arkuszy,
+   oddzielonymi przecinkami. Identyfikator znajduje się w URL-u po `/spreadsheets/d/`.
+   Na Vercel ustaw wartości w zmiennych projektu dla Production i ponów wdrożenie.
+   Klucza nie umieszczaj w repozytorium ani w czacie.
 
 ## Analiza wiadomości klienta sklepu
 

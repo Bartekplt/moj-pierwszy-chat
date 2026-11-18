@@ -18,14 +18,26 @@
     "@openrouter/ai-sdk-provider": "3.1.0",
     "@vercel/firewall": "1.2.6",
     "ai": "7.0.157",
+    "exceljs": "4.4.0",
+    "google-auth-library": "11.3.4",
     "next": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "saxes": "5.0.1",
+    "unpdf": "2.2.1",
+    "yauzl": "3.4.0",
+    "zod": "4.6.7"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   },
   "devDependencies": {
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/yauzl": "3.4.0",
     "typescript": "latest"
   }
 }
