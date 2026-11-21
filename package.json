@@ -20,7 +20,7 @@
     "ai": "7.0.157",
     "exceljs": "4.4.0",
     "google-auth-library": "11.3.4",
-    "next": "latest",
+    "next": "16.4.6",
     "react": "latest",
     "react-dom": "latest",
     "saxes": "5.0.1",
