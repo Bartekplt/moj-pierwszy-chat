@@ -434,60 +434,62 @@ test("dziesiąty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model
     "Zatrzymałem się po 10 krokach\nNie udało się uzyskać odpowiedzi modelu.\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
 });
 
-test("dziesięciokrokowy plan obliczeń używa tylko narzędzia wskazanego na dany krok", async (t) => {
-  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
-  const operations = [
-    { operacja: "dodaj", a: 2040, b: 180 },
-    { operacja: "podziel", a: 2220, b: 120 },
-    { operacja: "dodaj", a: 18.5, b: 1.2 },
-    { operacja: "odejmij", a: 39, b: 19.7 },
-    { operacja: "pomnoz", a: 19.3, b: 80 },
-    { operacja: "odejmij", a: 1544, b: 320 },
-    { operacja: "podziel", a: 1224, b: 4 },
-    { operacja: "odejmij", a: 306, b: 250 },
-  ];
-  const steps = ["1. **Waluty:** przelicz 480 EUR.", ...operations.map(({ operacja }, index) =>
-    `${index + 2}. **Kalkulator:** wykonaj działanie ${operacja} na wyniku poprzedniego kroku.`),
-  "10. **Podsumowanie:** podaj dzienny zysk i różnicę do celu."];
-  const previousResults = ["480 EUR = 2040 PLN", "2220", "18.5", "19.7", "19.3", "1544", "1224", "306", "56"];
-  let modelCalls = 0;
-  t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (new URL(url).hostname === "api.nbp.pl") {
-      return Response.json({ code: "EUR", rates: [{ mid: 4.25, effectiveDate: "2026-11-20" }] });
-    }
-    const body = JSON.parse(options.body);
-    const step = ++modelCalls;
-    assert.ok(!body.tools?.some(({ type }) => type === "openrouter:web_search"));
-    if (body.messages.some(({ role, tool_calls }) => role === "tool" || tool_calls?.length)) {
-      return Response.json({ error: { message: "Provider rejected previous tool-call history" } }, { status: 400 });
-    }
-    const context = JSON.stringify(body.messages.at(-1).content);
-    assert.doesNotMatch(context, /\*\*Kalkulator:/);
-    if (step > 1) {
-      for (const [index, value] of previousResults.slice(0, step - 1).entries()) {
-        assert.ok(context.includes(`${index + 1}. ${index ? "Wynik obliczenia: " : ""}${value}`));
+for (const separator of ["\n", ""]) {
+  test(`dziesięciokrokowy plan obliczeń używa wskazanego narzędzia ${separator ? "z nowymi liniami" : "po wklejeniu do pola czatu"}`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
+    const operations = [
+      { operacja: "dodaj", a: 2040, b: 180 },
+      { operacja: "podziel", a: 2220, b: 120 },
+      { operacja: "dodaj", a: 18.5, b: 1.2 },
+      { operacja: "odejmij", a: 39, b: 19.7 },
+      { operacja: "pomnoz", a: 19.3, b: 80 },
+      { operacja: "odejmij", a: 1544, b: 320 },
+      { operacja: "podziel", a: 1224, b: 4 },
+      { operacja: "odejmij", a: 306, b: 250 },
+    ];
+    const steps = ["1. **Waluty:** przelicz 480 EUR.", ...operations.map(({ operacja }, index) =>
+      `${index + 2}. **Kalkulator:** wykonaj działanie ${operacja} na wyniku poprzedniego kroku.`),
+    "10. **Podsumowanie:** podaj dzienny zysk i różnicę do celu."];
+    const previousResults = ["480 EUR = 2040 PLN", "2220", "18.5", "19.7", "19.3", "1544", "1224", "306", "56"];
+    let modelCalls = 0;
+    t.mock.method(globalThis, "fetch", async (url, options) => {
+      if (new URL(url).hostname === "api.nbp.pl") {
+        return Response.json({ code: "EUR", rates: [{ mid: 4.25, effectiveDate: "2026-11-20" }] });
       }
-    }
-    if (step === 10) {
-      assert.equal(body.tool_choice, "none");
-      assert.match(context, /Podsumuj ustalenia: podaj dzienny zysk/);
-      return streamReply({ text: "306 zł dziennie, czyli 56 zł powyżej celu." });
-    }
-    const name = step === 1 ? "waluty" : "kalkulator";
-    assert.ok(context.includes(`Wykonaj tylko bieżącą czynność narzędziem ${name}:`));
-    assert.deepEqual(body.tools.map((tool) => tool.function.name), [name]);
-    assert.equal(body.tool_choice.function.name, name);
-    const input = step === 1 ? { waluta: "EUR", kwota: 480 } : operations[step - 2];
-    return streamReply({ name, input, id: `profit-${step}` });
+      const body = JSON.parse(options.body);
+      const step = ++modelCalls;
+      assert.ok(!body.tools?.some(({ type }) => type === "openrouter:web_search"));
+      if (body.messages.some(({ role, tool_calls }) => role === "tool" || tool_calls?.length)) {
+        return Response.json({ error: { message: "Provider rejected previous tool-call history" } }, { status: 400 });
+      }
+      const context = JSON.stringify(body.messages.at(-1).content);
+      assert.doesNotMatch(context, /\*\*Kalkulator:/);
+      if (step > 1) {
+        for (const [index, value] of previousResults.slice(0, step - 1).entries()) {
+          assert.ok(context.includes(`${index + 1}. ${index ? "Wynik obliczenia: " : ""}${value}`));
+        }
+      }
+      if (step === 10) {
+        assert.equal(body.tool_choice, "none");
+        assert.match(context, /Podsumuj ustalenia: podaj dzienny zysk/);
+        return streamReply({ text: "306 zł dziennie, czyli 56 zł powyżej celu." });
+      }
+      const name = step === 1 ? "waluty" : "kalkulator";
+      assert.ok(context.includes(`Wykonaj tylko bieżącą czynność narzędziem ${name}:`));
+      assert.deepEqual(body.tools.map((tool) => tool.function.name), [name]);
+      assert.equal(body.tool_choice.function.name, name);
+      const input = step === 1 ? { waluta: "EUR", kwota: 480 } : operations[step - 2];
+      return streamReply({ name, input, id: `profit-${step}` });
+    });
+    const chat = client();
+    await chat.sendMessage({ text: ["Policz zysk stoiska.", ...steps].join(separator) });
+    const answer = chat.messages.at(-1);
+    assert.equal(chat.status, "ready");
+    assert.equal(modelCalls, 10);
+    assert.equal(answer.metadata.statistics.toolCalls, 9);
+    assert.match(answer.parts.filter(({ type }) => type === "text").map(({ text }) => text).join(""), /306 zł dziennie, czyli 56 zł powyżej celu/);
   });
-  const chat = client();
-  await chat.sendMessage({ text: steps.join("\n") });
-  const answer = chat.messages.at(-1);
-  assert.equal(chat.status, "ready");
-  assert.equal(modelCalls, 10);
-  assert.equal(answer.metadata.statistics.toolCalls, 9);
-  assert.match(answer.parts.filter(({ type }) => type === "text").map(({ text }) => text).join(""), /306 zł dziennie, czyli 56 zł powyżej celu/);
-});
+}
 
 test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł nie dubluje wyszukiwania", async () => {
   let calls = 0;

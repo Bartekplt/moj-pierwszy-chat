@@ -38,7 +38,8 @@ const parcelPlural = new Intl.PluralRules("pl");
 function calculationPlan(message: ChatMessage | undefined) {
   if (message?.parts.some((part) => part.type === "file")) return;
   const text = message?.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n") ?? "";
-  const steps = [...text.matchAll(/^[ \t]*(\d+)\.[ \t]*\*{0,2}(waluty|kalkulator|podsumowanie):\*{0,2}[ \t]*/gim)];
+  // Jednowierszowe pole czatu przy wklejeniu usuwa znaki nowej linii.
+  const steps = [...text.matchAll(/(?<!\d)(\d+)\.[ \t]*\*{0,2}(waluty|kalkulator|podsumowanie):\*{0,2}[ \t]*/gi)];
   const summary = steps.at(-1);
   if (steps.length < 3 || summary?.[2].toLowerCase() !== "podsumowanie"
     || !steps.every((step, index) => Number(step[1]) === index + 1)) return;
