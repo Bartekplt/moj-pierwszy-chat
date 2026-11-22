@@ -32,7 +32,9 @@ import {
 
 const responseError =
   "Nie udało się uzyskać odpowiedzi. Sprawdź klucz, identyfikator modelu i środki w OpenRouter, a następnie spróbuj ponownie.";
-const chatStepLimit = 6;
+const chatStepLimit = 10;
+const parcelNumber = new Intl.NumberFormat("pl-PL");
+const parcelPlural = new Intl.PluralRules("pl");
 
 export async function chatResponse(request: Request, body: unknown, startedAt = performance.now()) {
   let messages: ChatMessage[];
@@ -231,6 +233,12 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
     });
 
     type ChatStreamPart = TextStreamPart<typeof tools>;
+    const shippingRequest = messages.at(-1)?.parts.some((part) => part.type === "text" && /paczek|paczk|przesył/iu.test(part.text));
+    let shippingClockStep = 0;
+    let shippingHolidaysStep = 0;
+    let shippingResult: { step: number; days: number; dailyLimit: number; total: number } | undefined;
+    let shippingSummaryComplete = false;
+    const shippingSummaryText: ChatStreamPart[] = [];
     let startedSteps = 0;
     let hasText = false;
     let finalStepHasText = false;
@@ -254,6 +262,18 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
 
     function reportStop(controller: TransformStreamDefaultController<ChatStreamPart>) {
       if (limitReported || canceled || request.signal.aborted) return;
+      if (shippingResult && !shippingSummaryComplete && !task.failure) {
+        const { step, days, dailyLimit, total } = shippingResult;
+        const unit = parcelPlural.select(total) === "one" ? "paczkę" : parcelPlural.select(total) === "few" ? "paczki" : "paczek";
+        const result = `Możecie wysłać ${parcelNumber.format(total)} ${unit}.`;
+        const calculation = `Obliczenie: ${parcelNumber.format(days)} × ${parcelNumber.format(dailyLimit)} = ${parcelNumber.format(total)}. Kalkulator pomnożył liczbę dni nadawania przez dzienny limit paczek.`;
+        const stepNotice = task.deadline.aborted ? `Zatrzymałem się po 60 sekundach, na kroku ${Math.max(modelCalls, startedSteps, 1)}.`
+          : hitStepLimit ? `Zatrzymałem się po ${chatStepLimit} krokach.`
+          : task.count() >= task.toolLimit ? `Zatrzymałem się po ${task.toolLimit} wywołaniach narzędzi.`
+          : `Model nie dokończył podsumowania w kroku ${Math.max(modelFailure?.step ?? modelCalls, step + 1)}.`;
+        writeStop(controller, `${result}\n\n${calculation}\n\n${stepNotice}`);
+        return;
+      }
       const messages = [
         task.deadline.aborted && `Zatrzymałem się po 60 sekundach, na kroku ${Math.max(modelCalls, startedSteps, 1)}.`,
         !task.deadline.aborted && hitStepLimit && `Zatrzymałem się po ${chatStepLimit} krokach`,
@@ -263,14 +283,18 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
           : `Zadanie przerwało się na kroku ${modelFailure.step}. ${modelFailure.message}`),
       ].filter(Boolean);
       if (!messages.length) return;
-      limitReported = true;
-      const id = "agent-step-limit";
       const needsFallback = finalStepFailed || !finalStepHasText || Boolean(task.failure);
       const fallback = observations.size
         ? `\n\nZebrane informacje:\n${[...observations].map((text) => `• ${text}`).join("\n")}`
         : "\n\nNie udało się potwierdzić wyniku przed końcem zadania.";
+      writeStop(controller, `${messages.join("\n")}${needsFallback ? fallback : ""}`);
+    }
+
+    function writeStop(controller: TransformStreamDefaultController<ChatStreamPart>, text: string) {
+      limitReported = true;
+      const id = "agent-step-limit";
       controller.enqueue({ type: "text-start", id });
-      controller.enqueue({ type: "text-delta", id, text: `${hasText ? "\n\n" : ""}${messages.join("\n")}${needsFallback ? fallback : ""}` });
+      controller.enqueue({ type: "text-delta", id, text: `${hasText ? "\n\n" : ""}${text}` });
       controller.enqueue({ type: "text-end", id });
     }
 
@@ -286,6 +310,23 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
           return;
         }
         if (part.type === "start-step") startedSteps++;
+        if (shippingResult && startedSteps > shippingResult.step) {
+          if (part.type === "text-start" || part.type === "text-delta" || part.type === "text-end") {
+            shippingSummaryText.push(part);
+            return;
+          }
+          if (part.type === "finish-step") {
+            const complete = part.finishReason === "stop" && !finalStepFailed
+              && shippingSummaryText.some((chunk) => chunk.type === "text-delta" && chunk.text.trim());
+            if (complete) {
+              for (const chunk of shippingSummaryText) controller.enqueue(chunk);
+              shippingSummaryComplete = true;
+              hasText = true;
+              if (startedSteps === summaryStep) finalStepHasText = true;
+            }
+            shippingSummaryText.length = 0;
+          }
+        }
         if (part.type === "text-delta" && part.text.trim()) {
           hasText = true;
           if (startedSteps === summaryStep) finalStepHasText = true;
@@ -302,10 +343,26 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
           if (!request.signal.aborted && !task.deadline.aborted) reportModelFailure(part.error);
           return;
         }
-        if (part.type === "tool-result" && !part.dynamic && !part.preliminary && observations.size < 8) {
-          const observation = partialToolResult(part.toolName, part.output);
-          if (observation && observation !== task.failure?.message) {
-            observations.add(observation.length > 360 ? `${observation.slice(0, 359)}…` : observation);
+        if (part.type === "tool-result" && !part.dynamic && !part.preliminary) {
+          if (shippingRequest && task.executed.has(part.toolCallId)) {
+            if ((part.toolName === "aktualnyCzas" || part.toolName === "czas") && "data" in part.output && !shippingClockStep) {
+              shippingClockStep = startedSteps;
+            }
+            if (part.toolName === "swieta" && "dniWolne" in part.output && shippingClockStep && startedSteps > shippingClockStep) {
+              shippingHolidaysStep = startedSteps;
+            }
+            if (part.toolName === "kalkulator" && "wynik" in part.output && shippingHolidaysStep && startedSteps > shippingHolidaysStep) {
+              const { a, b, operacja } = part.input;
+              if (operacja === "pomnoz" && [a, b, part.output.wynik].every((n) => Number.isSafeInteger(n) && n >= 0)) {
+                shippingResult = { step: startedSteps, days: a, dailyLimit: b, total: part.output.wynik };
+              }
+            }
+          }
+          if (observations.size < 8) {
+            const observation = partialToolResult(part.toolName, part.output);
+            if (observation && observation !== task.failure?.message) {
+              observations.add(observation.length > 360 ? `${observation.slice(0, 359)}…` : observation);
+            }
           }
         }
         if (part.type === "source" && part.sourceType === "url" && observations.size < 8) {

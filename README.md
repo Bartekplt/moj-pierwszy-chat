@@ -31,8 +31,8 @@ Stare endpointy rozmowy, analizy i obrazu zostały usunięte po sprawdzeniu obu 
 
 Nad odpowiedzią widać narzędzia w kolejności użycia, z numerami kroków modelu.
 Narzędzia użyte w tym samym kroku mają wspólny numer. Źródła jednego wyszukiwania
-nie tworzą dodatkowych etykiet. Szósty krok służy wyłącznie do podsumowania.
-Czat dopisuje „Zatrzymałem się po 6 krokach” i w razie braku podsumowania pokazuje
+nie tworzą dodatkowych etykiet. Dziesiąty krok służy wyłącznie do podsumowania.
+Czat dopisuje „Zatrzymałem się po 10 krokach” i w razie braku podsumowania pokazuje
 krótki przegląd zebranych wyników. Przy zadaniu złożonym agent ma przeczytać wynik
 narzędzia przed wyborem kolejnego kroku.
 

@@ -23,7 +23,7 @@ const headers = () => ({ "Content-Type": "application/json", Origin: "http://loc
 const request = (body, extraHeaders = {}) => new Request("http://localhost/api/agent", {
   method: "POST", headers: { ...headers(), ...extraHeaders }, body: JSON.stringify(body),
 });
-function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText = "", calls, text = "Gotowe." } = {}) {
+function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText = "", calls, text = "Gotowe.", finishReason } = {}) {
   const toolCalls = calls ?? (name ? [{ name, input, id }] : []);
   const delta = toolCalls.length ? {
     tool_calls: toolCalls.map(({ name, input, id }, index) => ({
@@ -37,7 +37,7 @@ function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText
   const annotations = sources.length ? data({ annotations: sources.map((url) => ({
     type: "url_citation", url_citation: { url, title: "Źródło testowe" },
   })) }, null) : "";
-  return new Response(annotations + data(delta, null) + data({}, toolCalls.length ? "tool_calls" : "stop") + "data: [DONE]\n\n", {
+  return new Response(annotations + data(delta, null) + data({}, finishReason ?? (toolCalls.length ? "tool_calls" : "stop")) + "data: [DONE]\n\n", {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
@@ -152,7 +152,7 @@ test("narzędzia codzienne działają przez czat, a Wikipedia i rejestr UE dodaj
   assert.equal(outputs.czas.strefa, "Asia/Tokyo");
   assert.equal(outputs.notatki.zapisano, true);
   assert.equal(outputs.diagnostyka.model, "test/chat-model");
-  assert.equal(outputs.diagnostyka.limitKrokow, 6);
+  assert.equal(outputs.diagnostyka.limitKrokow, 10);
   assert.deepEqual(outputs.diagnostyka.narzedzia.sort(), Object.keys(chatToolLabels).sort());
   assert.deepEqual(outputs.diagnostyka.zmienneUstawione, {
     CHAT_PASSWORD: true, SESSION_SECRET: true, OPENROUTER_API_KEY: true, OPENROUTER_MODEL: true,
@@ -412,11 +412,11 @@ test("błąd generowania pozostaje błędem narzędzia, bez danych dostawcy i po
   assert.equal(imageCalls, 1);
 });
 
-test("szósty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model nie podsumuje wyników", async () => {
+test("dziesiąty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model nie podsumuje wyników", async () => {
   let calls = 0;
   globalThis.fetch = async (_url, options) => {
     calls++;
-    if (calls === 6) {
+    if (calls === 10) {
       const body = JSON.parse(options.body);
       assert.equal(body.tool_choice, "none");
       assert.match(JSON.stringify(body.messages), /To ostatni krok\. Podsumuj/);
@@ -426,11 +426,11 @@ test("szósty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model ni
   const chat = client();
   await chat.sendMessage({ text: "Pomnóż 17 przez 23." });
   assert.equal(chat.status, "ready");
-  assert.equal(calls, 6);
+  assert.equal(calls, 10);
   const answer = chat.messages.at(-1);
-  assert.deepEqual(answer.metadata.usedTools, Array(5).fill("kalkulator"));
+  assert.deepEqual(answer.metadata.usedTools, Array(9).fill("kalkulator"));
   assert.equal(answer.parts.filter((part) => part.type === "text").map((part) => part.text).join(""),
-    "Zatrzymałem się po 6 krokach\nNie udało się uzyskać odpowiedzi modelu.\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
+    "Zatrzymałem się po 10 krokach\nNie udało się uzyskać odpowiedzi modelu.\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
 });
 
 test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł nie dubluje wyszukiwania", async () => {
@@ -463,48 +463,48 @@ test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł 
   assert.equal(calls, 4);
 });
 
-test("naturalne zakończenie odpowiedzi w piątym kroku nie jest oznaczane jako przerwanie", async () => {
+test("naturalne zakończenie odpowiedzi w dziewiątym kroku nie jest oznaczane jako przerwanie", async () => {
   let calls = 0;
-  globalThis.fetch = async () => ++calls < 5
+  globalThis.fetch = async () => ++calls < 9
     ? streamReply({ name: "aktualnyCzas", id: `clock-${calls}` }) : streamReply();
   const chat = client();
   await chat.sendMessage({ text: "Sprawdź daty i odpowiedz." });
   assert.equal(chat.status, "ready");
-  assert.equal(calls, 5);
+  assert.equal(calls, 9);
   const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
   assert.equal(text, "Gotowe.");
 });
 
 test("przy limicie zachowuje tekst z wcześniejszych kroków oraz ostatnie podsumowanie", async () => {
   let calls = 0;
-  globalThis.fetch = async () => ++calls < 6
+  globalThis.fetch = async () => ++calls < 10
     ? streamReply({ name: "aktualnyCzas", id: `clock-${calls}`, prefixText: calls === 1 ? "Zbieram informacje. " : "" })
     : streamReply();
   const chat = client();
   await chat.sendMessage({ text: "Sprawdź daty." });
   const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
-  assert.equal(text, "Zbieram informacje. Gotowe.\n\nZatrzymałem się po 6 krokach");
-  assert.equal(calls, 6);
+  assert.equal(text, "Zbieram informacje. Gotowe.\n\nZatrzymałem się po 10 krokach");
+  assert.equal(calls, 10);
 });
 
 test("awaria modelu podczas podsumowania zachowuje ustalenia i komunikat o limicie", async () => {
   let calls = 0;
-  globalThis.fetch = async () => ++calls === 6
+  globalThis.fetch = async () => ++calls === 10
     ? new Response("SZCZEGÓŁY AWARII DOSTAWCY", { status: 503 })
     : streamReply({ name: "kalkulator", id: `count-${calls}`, input: { operacja: "dodaj", a: 2, b: 3 } });
   const chat = client();
   await chat.sendMessage({ text: "Oblicz 2 + 3" });
   const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
   assert.equal(chat.status, "ready");
-  assert.equal(calls, 6);
-  assert.match(text, /Zatrzymałem się po 6 krokach\nNie udało się uzyskać odpowiedzi modelu/);
+  assert.equal(calls, 10);
+  assert.match(text, /Zatrzymałem się po 10 krokach\nNie udało się uzyskać odpowiedzi modelu/);
   assert.match(text, /Zebrane informacje:\n• Wynik obliczenia: 5\./);
   assert.doesNotMatch(text, /SZCZEGÓŁY AWARII DOSTAWCY/);
 });
 
 const shippingRequest = "Policz, ile paczek możemy wysłać w Polsce od jutra do końca miesiąca. Nadajemy od poniedziałku do piątku, z wyłączeniem dni ustawowo wolnych. Dzienny limit to 40 paczek.";
 
-test("plan wysyłek używa kolejno czasu, świąt i kalkulatora", async (t) => {
+function mockShippingModel(t, summary) {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
   let modelCalls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
@@ -524,8 +524,12 @@ test("plan wysyłek używa kolejno czasu, świąt i kalkulatora", async (t) => {
       return streamReply({ name: "kalkulator", input: { operacja: "pomnoz", a: 6, b: 40 }, id: "capacity" });
     }
     assert.match(priorResults, /240/);
-    return streamReply({ text: "Od 23 do 30 listopada jest sześć dni nadawania. Możecie wysłać 240 paczek." });
+    return summary();
   });
+}
+
+test("plan wysyłek używa kolejno czasu, świąt i kalkulatora", async (t) => {
+  mockShippingModel(t, () => streamReply({ text: "Od 23 do 30 listopada jest sześć dni nadawania. Możecie wysłać 240 paczek." }));
   const chat = client();
   await chat.sendMessage({ text: shippingRequest });
   const answer = chat.messages.at(-1);
@@ -535,8 +539,30 @@ test("plan wysyłek używa kolejno czasu, świąt i kalkulatora", async (t) => {
   ]);
   assert.equal(answer.metadata.statistics.toolCalls, 3);
   assert.equal(answer.metadata.statistics.steps, 4);
-  assert.match(answer.parts.find(({ type }) => type === "text").text, /240 paczek/);
+  assert.equal(answer.parts.find(({ type }) => type === "text").text, "Od 23 do 30 listopada jest sześć dni nadawania. Możecie wysłać 240 paczek.");
 });
+
+for (const [caseName, summary] of [
+  ["błąd modelu", () => Response.json({ error: { message: "SZCZEGÓŁY AWARII DOSTAWCY" } }, { status: 503 })],
+  ["ucięte podsumowanie", () => streamReply({ text: "NIEDOKOŃCZONY FRAGMENT", finishReason: "length" })],
+  ["puste podsumowanie", () => streamReply({ text: "" })],
+]) {
+  test(`plan wysyłek podaje końcowy wynik z kalkulatora po kroku 4: ${caseName}`, async (t) => {
+    mockShippingModel(t, summary);
+    const chat = client();
+    await chat.sendMessage({ text: shippingRequest });
+    const answer = chat.messages.at(-1);
+    const text = answer.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+    assert.equal(chat.status, "ready");
+    assert.equal(answer.metadata.statistics.steps, 4);
+    assert.deepEqual(answer.metadata.usedTools, ["aktualnyCzas", "swieta", "kalkulator"]);
+    assert.match(text, /^Możecie wysłać 240 paczek\./);
+    assert.match(text, /6 × 40 = 240/);
+    assert.match(text, /liczbę dni nadawania przez dzienny limit/);
+    assert.match(text, /nie dokończył podsumowania w kroku 4/);
+    assert.doesNotMatch(text, /SZCZEGÓŁY AWARII DOSTAWCY|NIEDOKOŃCZONY FRAGMENT/);
+  });
+}
 
 test("awaria modelu w drugim kroku pokazuje numer kroku i zachowuje datę", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
