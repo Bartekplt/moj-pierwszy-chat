@@ -461,17 +461,20 @@ test("dziesięciokrokowy plan obliczeń używa tylko narzędzia wskazanego na da
     if (body.messages.some(({ role, tool_calls }) => role === "tool" || tool_calls?.length)) {
       return Response.json({ error: { message: "Provider rejected previous tool-call history" } }, { status: 400 });
     }
+    const context = JSON.stringify(body.messages.at(-1).content);
+    assert.doesNotMatch(context, /\*\*Kalkulator:/);
     if (step > 1) {
-      const context = JSON.stringify(body.messages.at(-1).content);
       for (const [index, value] of previousResults.slice(0, step - 1).entries()) {
         assert.ok(context.includes(`${index + 1}. ${index ? "Wynik obliczenia: " : ""}${value}`));
       }
     }
     if (step === 10) {
       assert.equal(body.tool_choice, "none");
+      assert.match(context, /Podsumuj ustalenia: podaj dzienny zysk/);
       return streamReply({ text: "306 zł dziennie, czyli 56 zł powyżej celu." });
     }
     const name = step === 1 ? "waluty" : "kalkulator";
+    assert.ok(context.includes(`Wykonaj tylko bieżącą czynność narzędziem ${name}:`));
     assert.deepEqual(body.tools.map((tool) => tool.function.name), [name]);
     assert.equal(body.tool_choice.function.name, name);
     const input = step === 1 ? { waluta: "EUR", kwota: 480 } : operations[step - 2];

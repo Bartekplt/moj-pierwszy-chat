@@ -36,11 +36,24 @@ const parcelNumber = new Intl.NumberFormat("pl-PL");
 const parcelPlural = new Intl.PluralRules("pl");
 
 function calculationPlan(message: ChatMessage | undefined) {
+  if (message?.parts.some((part) => part.type === "file")) return;
   const text = message?.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n") ?? "";
-  const steps = [...text.matchAll(/^\s*(\d+)\.\s*\*{0,2}(waluty|kalkulator):\*{0,2}\s+\S/gim)];
-  if (steps.length < 2 || !steps.every((step, index) => Number(step[1]) === index + 1)) return;
-  if (!new RegExp(`^\\s*${steps.length + 1}\\.\\s*\\*{0,2}podsumowanie:`, "im").test(text)) return;
-  return steps.map((step) => step[2].toLowerCase() === "waluty" ? "waluty" as const : "kalkulator" as const);
+  const steps = [...text.matchAll(/^[ \t]*(\d+)\.[ \t]*\*{0,2}(waluty|kalkulator|podsumowanie):\*{0,2}[ \t]*/gim)];
+  const summary = steps.at(-1);
+  if (steps.length < 3 || summary?.[2].toLowerCase() !== "podsumowanie"
+    || !steps.every((step, index) => Number(step[1]) === index + 1)) return;
+  const operations = steps.slice(0, -1).map((step, index) => ({
+    name: step[2].toLowerCase(),
+    instruction: text.slice(step.index + step[0].length, steps[index + 1].index).trim(),
+  }));
+  if (!operations.every(({ name, instruction }) => (name === "waluty" || name === "kalkulator") && instruction)) return;
+  return {
+    context: text.slice(0, steps[0].index).trim(),
+    operations: operations.map(({ name, instruction }) => ({
+      tool: name === "waluty" ? "waluty" as const : "kalkulator" as const, instruction,
+    })),
+    summary: text.slice(summary.index + summary[0].length).trim(),
+  };
 }
 
 export async function chatResponse(request: Request, body: unknown, startedAt = performance.now(), chatStepLimit = 10) {
@@ -188,7 +201,7 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       },
     } });
     const instructions = `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`;
-    const plannedTools = calculationPlan(messages.at(-1));
+    const plan = calculationPlan(messages.at(-1));
     const toolsWithoutSearch = (Object.keys(tools) as ChatToolName[]).filter((name) => name !== "web_search");
     let summaryStep: number | undefined;
     let toolFailureStep: number | undefined;
@@ -200,23 +213,28 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       instructions,
       prepareStep: ({ stepNumber, steps, initialMessages }) => {
         hitStepLimit = stepNumber === chatStepLimit - 1;
-        const plannedTool = plannedTools?.[stepNumber];
-        // Każdy krok planu dostaje wyniki obliczeń bez poprzednich wywołań w formacie dostawcy.
-        const planMessages = plannedTools && stepNumber > 0 ? [...initialMessages, {
+        const plannedStep = plan?.operations[stepNumber];
+        const summarize = hitStepLimit || Boolean(task.failure) || task.count() >= task.toolLimit;
+        // Model dostaje tylko bieżącą czynność i wyniki wykorzystane w tej rozmowie.
+        const planMessages = plan ? [...initialMessages.slice(0, -1), {
           role: "user" as const,
           content: [
-            `Agent rozpoczął krok ${stepNumber + 1} planu. Zweryfikowane wyniki wcześniejszych kroków:`,
+            plan.context,
+            `Zweryfikowane wyniki poprzednich kroków planu:`,
             ...steps.flatMap((step, index) => step.toolResults.flatMap(({ toolName, output }) => {
               if (toolName !== "waluty" && toolName !== "kalkulator") return [];
               const result = partialToolResult(toolName, output);
               return result ? [`${index + 1}. ${result}`] : [];
             })),
-          ].join("\n"),
+            !summarize && plannedStep
+              ? `Wykonaj tylko bieżącą czynność narzędziem ${plannedStep.tool}: ${plannedStep.instruction}`
+              : `Podsumuj ustalenia: ${plan.summary}`,
+          ].filter(Boolean).join("\n"),
         }] : undefined;
-        if (!hitStepLimit && !task.failure && task.count() < task.toolLimit) {
-          if (!plannedTools) return;
-          if (plannedTool) return {
-            messages: planMessages, activeTools: [plannedTool], toolChoice: { type: "tool", toolName: plannedTool },
+        if (!summarize) {
+          if (!plan) return;
+          if (plannedStep) return {
+            messages: planMessages, activeTools: [plannedStep.tool], toolChoice: { type: "tool", toolName: plannedStep.tool },
           };
         }
         summaryStep = stepNumber + 1;
@@ -281,7 +299,7 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       if (modelFailure) return;
       const status = APICallError.isInstance(error) ? error.statusCode : undefined;
       const step = Math.max(modelCalls, startedSteps, 1);
-      if (plannedTools) {
+      if (plan) {
         console.warn("calculation_plan_model_error", {
           step, status, kind: searchDeadline?.aborted ? "search_timeout" : status ? "http" : "stream",
         });
