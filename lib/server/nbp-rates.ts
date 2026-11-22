@@ -30,14 +30,15 @@ async function getPublishedRates(waluta: string, { odDnia, doDnia }: ReturnType<
     const ratesPath = `rates/${table.toLowerCase()}/${waluta.toLowerCase()}/`;
     const range = `${odDnia}/${doDnia}/`;
     const response = await fetchData(new URL(`${ratesPath}${range}${lastCount ? "?format=json" : ""}`, base), nbpResponse, signal);
-    if (!lastCount) return response;
     if (response.ok ? response.data.rates.some(inPeriod) : response.status !== 404) return response;
 
-    const last = await fetchData(new URL(`${ratesPath}last/${lastCount}/`, base), nbpResponse, signal);
+    const latestPath = lastCount ? `${ratesPath}last/${lastCount}/` : ratesPath.slice(0, -1);
+    const last = await fetchData(new URL(latestPath, base), nbpResponse, signal);
     if (last.ok && last.data.code === waluta && last.data.rates.some(inPeriod)) return last;
 
-    // Zapytanie o jedną walutę potrafi zwrócić 404, mimo że NBP ma ją w pełnej tabeli.
-    const tables = await fetchData(new URL(`tables/${table.toLowerCase()}/${range}?format=json`, base), nbpTables, signal);
+    // Adresy z końcowym ukośnikiem mogą zwracać 404 mimo dostępnych notowań.
+    const tableRange = lastCount ? range : range.slice(0, -1);
+    const tables = await fetchData(new URL(`tables/${table.toLowerCase()}/${tableRange}?format=json`, base), nbpTables, signal);
     if (!tables.ok) return tables;
     const rates = tables.data.flatMap(({ effectiveDate, rates }) => {
       const quoted = rates.find(({ code }) => code === waluta);
@@ -52,7 +53,7 @@ async function getPublishedRates(waluta: string, { odDnia, doDnia }: ReturnType<
     response = await lookup(tabela);
   }
   if (!response.ok) return toolFailure(response.status === 404 ?
-    `NBP nie publikuje kursu dla waluty ${waluta} w sprawdzonym okresie. Sprawdź kod waluty.` :
+    `NBP nie zwrócił kursu ${waluta} w sprawdzonym okresie. Spróbuj ponownie później.` :
     "Nie udało się pobrać kursu z NBP. Spróbuj ponownie.");
   if (response.data.code !== waluta) return toolFailure("NBP zwrócił kurs dla innej waluty. Spróbuj ponownie.");
   return { tabela, rates: response.data.rates.filter(inPeriod) };

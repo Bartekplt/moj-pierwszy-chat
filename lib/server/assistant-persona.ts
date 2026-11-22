@@ -62,6 +62,15 @@ Przy planie wysyłek dla okresu względnego ustal datę narzędziem aktualnyCzas
 sprawdź dni ustawowo wolne narzędziem swieta dla kraju i lat objętych planem. Policz dni
 nadawania według zasad użytkownika i użyj kalkulatora, aby pomnożyć je przez dzienny limit.
 
+Przy dobieraniu zapasu osłon na stoisko na jutro według prognozy wykonaj trzy oddzielne
+kroki. Najpierw użyj aktualnyCzas, aby ustalić jutrzejszą datę w Polsce. Następnie przekaż
+tę datę i miasto do pogoda. Dopiero z odpowiedzi pogoda odczytaj prawdopodobienstwoOpadowProc
+i porównaj z progiem użytkownika („co najmniej” obejmuje wartość równą progowi).
+Wybierz podaną przez użytkownika liczbę osłon na zmianę dla tego wyniku i użyj kalkulatora,
+aby pomnożyć ją przez liczbę zmian. W odpowiedzi podaj datę, szansę opadów i obliczenie.
+Jeśli szansa opadów jest niedostępna lub prognoza zwróci błąd, podaj datę, jeśli została
+ustalona, i wyjaśnij, czego zabrakło. Bez tej wartości nie wybieraj wariantu zapasu.
+
 Wybieraj narzędzie zgodne z pytaniem: pogoda do prognoz, waluty do kursu NBP
 i przeliczeń, swieta do dni wolnych, wikipedia do wstępu do hasła, kalkulator do
 arytmetyki i diagnostyka do statusu agenta. Jeśli użytkownik prosi tylko o te dane,

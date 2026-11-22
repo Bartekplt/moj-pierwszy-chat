@@ -32,11 +32,18 @@ import {
 
 const responseError =
   "Nie udało się uzyskać odpowiedzi. Sprawdź klucz, identyfikator modelu i środki w OpenRouter, a następnie spróbuj ponownie.";
-const chatStepLimit = 10;
 const parcelNumber = new Intl.NumberFormat("pl-PL");
 const parcelPlural = new Intl.PluralRules("pl");
 
-export async function chatResponse(request: Request, body: unknown, startedAt = performance.now()) {
+function calculationPlan(message: ChatMessage | undefined) {
+  const text = message?.parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n") ?? "";
+  const steps = [...text.matchAll(/^\s*(\d+)\.\s*\*{0,2}(waluty|kalkulator):\*{0,2}\s+\S/gim)];
+  if (steps.length < 2 || !steps.every((step, index) => Number(step[1]) === index + 1)) return;
+  if (!new RegExp(`^\\s*${steps.length + 1}\\.\\s*\\*{0,2}podsumowanie:`, "im").test(text)) return;
+  return steps.map((step) => step[2].toLowerCase() === "waluty" ? "waluty" as const : "kalkulator" as const);
+}
+
+export async function chatResponse(request: Request, body: unknown, startedAt = performance.now(), chatStepLimit = 10) {
   let messages: ChatMessage[];
   const documents = new Map<string, ChatDocument>();
 
@@ -181,6 +188,8 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       },
     } });
     const instructions = `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`;
+    const plannedTools = calculationPlan(messages.at(-1));
+    const toolsWithoutSearch = (Object.keys(tools) as ChatToolName[]).filter((name) => name !== "web_search");
     let summaryStep: number | undefined;
     let toolFailureStep: number | undefined;
     let hitStepLimit = false;
@@ -191,11 +200,15 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       instructions,
       prepareStep: ({ stepNumber }) => {
         hitStepLimit = stepNumber === chatStepLimit - 1;
-        if (!hitStepLimit && !task.failure && task.count() < task.toolLimit) return;
+        const plannedTool = plannedTools?.[stepNumber];
+        if (!hitStepLimit && !task.failure && task.count() < task.toolLimit) {
+          if (!plannedTools) return;
+          if (plannedTool) return { activeTools: [plannedTool], toolChoice: { type: "tool", toolName: plannedTool } };
+        }
         summaryStep = stepNumber + 1;
         return {
           toolChoice: "none",
-          activeTools: (Object.keys(tools) as ChatToolName[]).filter((name) => name !== "web_search"),
+          activeTools: toolsWithoutSearch,
           instructions: `${instructions}\n\nTo ostatni krok. Podsumuj w odpowiedzi zweryfikowane wyniki z dotychczasowych kroków ` +
             "i jasno wskaż, czego nie udało się ustalić. Po błędzie nie ponawiaj wywołania. Komunikat końcowy dopisze aplikacja.",
         };

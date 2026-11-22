@@ -82,8 +82,13 @@ test("NBP szuka kursu w tabeli B po 404 i przelicza również ze złotych", asyn
   assert.equal(result.wynik, 10_000);
   assert.equal(result.walutaWyniku, "ISK");
   assert.equal(result.tabela, "B");
-  assert.deepEqual(paths, ["/api/exchangerates/rates/a/isk/2026-11-08/2026-11-22/", "/api/exchangerates/rates/b/isk/2026-11-08/2026-11-22/"]);
-  assert.match((await execute(waluty, { waluta: "ZZZ" })).blad, /nie publikuje kursu/);
+  assert.deepEqual(paths, [
+    "/api/exchangerates/rates/a/isk/2026-11-08/2026-11-22/",
+    "/api/exchangerates/rates/a/isk",
+    "/api/exchangerates/tables/a/2026-11-08/2026-11-22",
+    "/api/exchangerates/rates/b/isk/2026-11-08/2026-11-22/",
+  ]);
+  assert.match((await execute(waluty, { waluta: "ZZZ" })).blad, /nie zwrócił kursu ZZZ/);
   assert.equal(waluty.inputSchema.safeParse({ waluta: "../../EUR" }).success, false);
 });
 
@@ -93,9 +98,9 @@ test("NBP wybiera najnowszą publikację, pomija kurs z 2004 r. i poprawnie zaok
   const future = { effectiveDate: "2026-11-23", mid: 9.5 };
   let rates = [stale, { effectiveDate: "2026-11-20", mid: 4.4559 }, future, { effectiveDate: "2026-11-19", mid: 4.4165 }];
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    assert.equal(url.pathname, "/api/exchangerates/rates/a/eur/2026-11-08/2026-11-22/");
     assert.equal(options.cache, "no-store");
-    return Response.json({ code: "EUR", rates });
+    if (url.pathname.includes("/rates/")) return Response.json({ code: "EUR", rates });
+    return Response.json([]);
   });
   const result = await execute(waluty, { waluta: "EUR", kwota: 250 });
   assert.equal(result.dataKursu, "2026-11-20");
@@ -104,8 +109,40 @@ test("NBP wybiera najnowszą publikację, pomija kurs z 2004 r. i poprawnie zaok
   assert.equal(result.tabela, "A");
   rates = [stale, future];
   const unavailable = await execute(waluty, { waluta: "EUR", kwota: 250 });
-  assert.match(unavailable.blad, /nie zwrócił aktualnego kursu EUR/);
+  assert.match(unavailable.blad, /nie zwrócił kursu EUR/);
   assert.equal(unavailable.kursPLN, undefined);
+});
+
+test("NBP zwraca aktualny EUR mimo 404 z zapytania o zakres, także przez pełną tabelę", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T11:00:00Z") });
+  let latestIsStale = false;
+  const paths = [];
+  t.mock.method(globalThis, "fetch", async (url) => {
+    paths.push(url.pathname + url.search);
+    if (url.pathname === "/api/exchangerates/rates/a/eur") return Response.json({
+      code: "EUR", rates: [latestIsStale ? { effectiveDate: "2004-04-28", mid: 4.7805 } : { effectiveDate: "2026-11-20", mid: 4.4559 }],
+    });
+    if (url.pathname === "/api/exchangerates/tables/a/2026-11-08/2026-11-22") return Response.json([
+      { effectiveDate: "2026-11-19", rates: [{ code: "EUR", mid: 4.4165 }] },
+      { effectiveDate: "2026-11-20", rates: [{ code: "EUR", mid: 4.4559 }] },
+    ]);
+    return new Response(null, { status: 404 });
+  });
+
+  for (const useTable of [false, true]) {
+    latestIsStale = useTable;
+    paths.length = 0;
+    const { wynik, dataKursu, kursPLN } = await execute(waluty, { waluta: "EUR", kwota: 480 });
+    assert.equal(kursPLN, 4.4559);
+    assert.equal(dataKursu, "2026-11-20");
+    assert.equal(wynik, 2138.83);
+    assert.equal(((wynik + 180) / 120).toFixed(2), "19.32");
+    assert.deepEqual(paths.slice(0, 2), [
+      "/api/exchangerates/rates/a/eur/2026-11-08/2026-11-22/",
+      "/api/exchangerates/rates/a/eur",
+    ]);
+    assert.deepEqual(paths.slice(2), useTable ? ["/api/exchangerates/tables/a/2026-11-08/2026-11-22?format=json"] : []);
+  }
 });
 
 test("święta i Wikipedia obsługują nieznany kraj i nieistniejące hasło", async (t) => {

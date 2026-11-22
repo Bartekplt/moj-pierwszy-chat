@@ -7,6 +7,7 @@ import { JWT } from "google-auth-library";
 import { POST } from "../app/api/agent/route.ts";
 import { chatToolLabels, markChatInterrupted, prepareAgentMessages } from "../lib/chat.ts";
 import { createSession, SESSION_COOKIE } from "../lib/server/session.ts";
+import { chatResponse } from "../lib/server/agent-chat.ts";
 import { generatePicture, validateImagePrompt } from "../lib/server/image-generation.ts";
 import { imageFailureMessages } from "../lib/image-errors.ts";
 import { XLSX_TYPE } from "../lib/documents.ts";
@@ -41,13 +42,13 @@ function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText
     headers: { "Content-Type": "text/event-stream" },
   });
 }
-function client(browserRequests = [], sessionHeaders = headers(), onFinish) {
+function client(browserRequests = [], sessionHeaders = headers(), onFinish, handler = POST) {
   return new Chat({ onFinish, transport: new DefaultChatTransport({
     api: "/api/agent",
     prepareSendMessagesRequest: ({ messages }) => ({ body: { mode: "chat", messages: prepareAgentMessages(messages) } }),
     fetch: async (_url, options) => {
       browserRequests.push(JSON.parse(options.body));
-      return POST(new Request("http://localhost/api/agent", { ...options, headers: sessionHeaders }));
+      return handler(new Request("http://localhost/api/agent", { ...options, headers: sessionHeaders }));
     },
   }) });
 }
@@ -433,6 +434,48 @@ test("dziesiąty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model
     "Zatrzymałem się po 10 krokach\nNie udało się uzyskać odpowiedzi modelu.\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
 });
 
+test("dziesięciokrokowy plan obliczeń używa tylko narzędzia wskazanego na dany krok", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
+  const operations = [
+    { operacja: "dodaj", a: 2040, b: 180 },
+    { operacja: "podziel", a: 2220, b: 120 },
+    { operacja: "dodaj", a: 18.5, b: 1.2 },
+    { operacja: "odejmij", a: 39, b: 19.7 },
+    { operacja: "pomnoz", a: 19.3, b: 80 },
+    { operacja: "odejmij", a: 1544, b: 320 },
+    { operacja: "podziel", a: 1224, b: 4 },
+    { operacja: "odejmij", a: 306, b: 250 },
+  ];
+  const steps = ["1. **Waluty:** przelicz 480 EUR.", ...operations.map(({ operacja }, index) =>
+    `${index + 2}. **Kalkulator:** wykonaj działanie ${operacja} na wyniku poprzedniego kroku.`),
+  "10. **Podsumowanie:** podaj dzienny zysk i różnicę do celu."];
+  let modelCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).hostname === "api.nbp.pl") {
+      return Response.json({ code: "EUR", rates: [{ mid: 4.25, effectiveDate: "2026-11-20" }] });
+    }
+    const body = JSON.parse(options.body);
+    const step = ++modelCalls;
+    assert.ok(!body.tools?.some(({ type }) => type === "openrouter:web_search"));
+    if (step === 10) {
+      assert.equal(body.tool_choice, "none");
+      return streamReply({ text: "306 zł dziennie, czyli 56 zł powyżej celu." });
+    }
+    const name = step === 1 ? "waluty" : "kalkulator";
+    assert.deepEqual(body.tools.map((tool) => tool.function.name), [name]);
+    assert.equal(body.tool_choice.function.name, name);
+    const input = step === 1 ? { waluta: "EUR", kwota: 480 } : operations[step - 2];
+    return streamReply({ name, input, id: `profit-${step}` });
+  });
+  const chat = client();
+  await chat.sendMessage({ text: steps.join("\n") });
+  const answer = chat.messages.at(-1);
+  assert.equal(chat.status, "ready");
+  assert.equal(modelCalls, 10);
+  assert.equal(answer.metadata.statistics.toolCalls, 9);
+  assert.match(answer.parts.filter(({ type }) => type === "text").map(({ text }) => text).join(""), /306 zł dziennie, czyli 56 zł powyżej celu/);
+});
+
 test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł nie dubluje wyszukiwania", async () => {
   let calls = 0;
   globalThis.fetch = async (_url, options) => {
@@ -501,6 +544,85 @@ test("awaria modelu podczas podsumowania zachowuje ustalenia i komunikat o limic
   assert.match(text, /Zebrane informacje:\n• Wynik obliczenia: 5\./);
   assert.doesNotMatch(text, /SZCZEGÓŁY AWARII DOSTAWCY/);
 });
+
+const boothRequest = "Jutro mam stoisko w Krakowie. Jeśli szansa opadów wynosi co najmniej 50%, przygotuj po 20 osłon przeciwdeszczowych na każdą z 4 zmian. W przeciwnym razie przygotuj po 5 na zmianę. Sprawdź prognozę i podaj łączną liczbę osłon.";
+
+for (const { label, rain, limit, expectedTools } of [
+  { label: "50% wybiera 80 osłon", rain: 50, expectedTools: ["aktualnyCzas", "pogoda", "kalkulator"] },
+  { label: "49% wybiera 20 osłon", rain: 49, expectedTools: ["aktualnyCzas", "pogoda", "kalkulator"] },
+  { label: "limit dwóch kroków zachowuje datę", rain: 50, limit: 2, expectedTools: ["aktualnyCzas"] },
+  { label: "awaria prognozy kończy bez wyniku", rain: null, expectedTools: ["aktualnyCzas", "pogoda"] },
+]) {
+  test(`zapas na stoisko: ${label}`, async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-29T23:30:00Z") });
+    let modelCalls = 0;
+    let forecastCalls = 0;
+    t.mock.method(globalThis, "fetch", async (url, options) => {
+      const address = new URL(url);
+      if (address.hostname === "geocoding-api.open-meteo.com") {
+        assert.equal(address.searchParams.get("name"), "Kraków");
+        return Response.json({ results: [{ name: "Kraków", country_code: "PL", latitude: 50.06, longitude: 19.94 }] });
+      }
+      if (address.hostname === "api.open-meteo.com") {
+        forecastCalls++;
+        assert.equal(address.searchParams.get("start_date"), "2026-12-01");
+        assert.equal(address.searchParams.get("end_date"), "2026-12-01");
+        if (rain === null) return new Response(null, { status: 503 });
+        return Response.json({ timezone: "Europe/Warsaw", daily: {
+          time: ["2026-12-01"], weather_code: [3], temperature_2m_min: [1], temperature_2m_max: [4], precipitation_probability_max: [rain],
+        } });
+      }
+      assert.equal(address.hostname, "openrouter.ai");
+      const body = JSON.parse(options.body);
+      const priorResults = JSON.stringify(body.messages.filter(({ role }) => role === "tool"));
+      if (++modelCalls === 1) {
+        assert.match(JSON.stringify(body.messages[0]), /Przy dobieraniu zapasu osłon na stoisko na jutro/);
+        return streamReply({ name: "aktualnyCzas", id: "booth-clock" });
+      }
+      if (modelCalls === 2) {
+        assert.match(priorResults, /30\.11\.2026/);
+        if (limit) {
+          assert.equal(body.tool_choice, "none");
+          return streamReply({ text: "" });
+        }
+        return streamReply({ name: "pogoda", id: "booth-weather", input: { miasto: "Kraków", kraj: "PL", data: "2026-12-01" } });
+      }
+      if (rain === null) {
+        assert.equal(body.tool_choice, "none");
+        assert.match(priorResults, /nie udostępniło prognozy/);
+        return streamReply({ text: "" });
+      }
+      const perShift = rain >= 50 ? 20 : 5;
+      if (modelCalls === 3) {
+        assert.ok(priorResults.includes(`"prawdopodobienstwoOpadowProc":${rain}`) ||
+          priorResults.includes(`\\"prawdopodobienstwoOpadowProc\\":${rain}`));
+        return streamReply({ name: "kalkulator", id: "booth-calc", input: { operacja: "pomnoz", a: perShift, b: 4 } });
+      }
+      assert.match(priorResults, new RegExp(`wynik.+${perShift * 4}`));
+      return streamReply({ text: `1 grudnia w Krakowie szansa opadów to ${rain}%. ${perShift} × 4 = ${perShift * 4} osłon.` });
+    });
+
+    const chat = limit ? client([], headers(), undefined, async (request) =>
+      chatResponse(request, await request.json(), performance.now(), limit)) : client();
+    await chat.sendMessage({ text: boothRequest });
+    const answer = chat.messages.at(-1);
+    const text = answer.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+    assert.equal(chat.status, "ready");
+    assert.deepEqual(answer.metadata.toolSteps, expectedTools.map((tool, index) => ({ step: index + 1, tools: [tool] })));
+    assert.equal(modelCalls, expectedTools.length + 1);
+    assert.equal(forecastCalls, limit ? 0 : 1);
+    if (limit) {
+      assert.match(text, /Zatrzymałem się po 2 krokach/);
+      assert.match(text, /Zebrane informacje:\n• 30\.11\.2026/);
+    } else if (rain === null) {
+      assert.match(text, /Krok 2:.*pogoda.*Open-Meteo nie udostępniło prognozy/);
+      assert.match(text, /Zebrane informacje:\n• 30\.11\.2026/);
+    } else {
+      assert.match(text, new RegExp(`szansa opadów to ${rain}%`));
+      assert.match(text, /× 4 = (80|20) osłon/);
+    }
+  });
+}
 
 const shippingRequest = "Policz, ile paczek możemy wysłać w Polsce od jutra do końca miesiąca. Nadajemy od poniedziałku do piątku, z wyłączeniem dni ustawowo wolnych. Dzienny limit to 40 paczek.";
 

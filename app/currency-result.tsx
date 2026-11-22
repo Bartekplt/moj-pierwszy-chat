@@ -32,7 +32,7 @@ export default function CurrencyResult({ output }: { output: unknown }) {
         <p>{formatAmount(kwota, walutaKwoty)} = <strong>{formatAmount(wynik, walutaWyniku)}</strong></p>
       )}
       {tabela && dataKursu && (
-        <a href={`https://api.nbp.pl/api/exchangerates/rates/${tabela.toLowerCase()}/${waluta.toLowerCase()}/${dataKursu}/`}
+        <a href={`https://api.nbp.pl/api/exchangerates/rates/${tabela.toLowerCase()}/${waluta.toLowerCase()}/${dataKursu}`}
           target="_blank" rel="noopener noreferrer">
           NBP, tabela {tabela}, publikacja <time dateTime={dataKursu}>{dataKursu.split("-").reverse().join(".")}</time>
         </a>

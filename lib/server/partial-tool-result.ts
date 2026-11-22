@@ -19,7 +19,9 @@ export function partialToolResult(tool: ChatToolName, output: unknown): string |
     case "pogoda": {
       const temperatures = [result.temperaturaMinC, result.temperaturaMaxC].filter((value) => typeof value === "number");
       const temperature = temperatures.length ? `${temperatures.join("–")} °C` : "";
-      const weather = [displayText(result.warunki), temperature].filter(Boolean).join(", ");
+      const precipitation = typeof result.prawdopodobienstwoOpadowProc === "number"
+        ? `szansa opadów ${result.prawdopodobienstwoOpadowProc}%` : "";
+      const weather = [displayText(result.warunki), temperature, precipitation].filter(Boolean).join(", ");
       return `${result.miasto}, ${result.data}: ${weather || "brak szczegółów prognozy"}.`;
     }
     case "waluty":
