@@ -430,7 +430,7 @@ test("szósty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model ni
   const answer = chat.messages.at(-1);
   assert.deepEqual(answer.metadata.usedTools, Array(5).fill("kalkulator"));
   assert.equal(answer.parts.filter((part) => part.type === "text").map((part) => part.text).join(""),
-    "Zatrzymałem się po 6 krokach\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
+    "Zatrzymałem się po 6 krokach\nNie udało się uzyskać odpowiedzi modelu.\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
 });
 
 test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł nie dubluje wyszukiwania", async () => {
@@ -497,7 +497,64 @@ test("awaria modelu podczas podsumowania zachowuje ustalenia i komunikat o limic
   const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
   assert.equal(chat.status, "ready");
   assert.equal(calls, 6);
-  assert.equal(text, "Zatrzymałem się po 6 krokach\n\nZebrane informacje:\n• Wynik obliczenia: 5.");
+  assert.match(text, /Zatrzymałem się po 6 krokach\nNie udało się uzyskać odpowiedzi modelu/);
+  assert.match(text, /Zebrane informacje:\n• Wynik obliczenia: 5\./);
+  assert.doesNotMatch(text, /SZCZEGÓŁY AWARII DOSTAWCY/);
+});
+
+const shippingRequest = "Policz, ile paczek możemy wysłać w Polsce od jutra do końca miesiąca. Nadajemy od poniedziałku do piątku, z wyłączeniem dni ustawowo wolnych. Dzienny limit to 40 paczek.";
+
+test("plan wysyłek używa kolejno czasu, świąt i kalkulatora", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
+  let modelCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).hostname === "nagerholidays.com") {
+      assert.equal(new URL(url).pathname, "/api/v4/Holidays/PL/2026");
+      return Response.json([{ date: "2026-11-11", name: "Independence Day", nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public"] }]);
+    }
+    const { messages } = JSON.parse(options.body);
+    const priorResults = JSON.stringify(messages.filter(({ role }) => role === "tool"));
+    if (++modelCalls === 1) return streamReply({ name: "aktualnyCzas", id: "clock" });
+    if (modelCalls === 2) {
+      assert.match(priorResults, /22\.11\.2026/);
+      return streamReply({ name: "swieta", input: { kraj: "PL", rok: 2026 }, id: "holidays" });
+    }
+    if (modelCalls === 3) {
+      assert.match(priorResults, /2026-11-11/);
+      return streamReply({ name: "kalkulator", input: { operacja: "pomnoz", a: 6, b: 40 }, id: "capacity" });
+    }
+    assert.match(priorResults, /240/);
+    return streamReply({ text: "Od 23 do 30 listopada jest sześć dni nadawania. Możecie wysłać 240 paczek." });
+  });
+  const chat = client();
+  await chat.sendMessage({ text: shippingRequest });
+  const answer = chat.messages.at(-1);
+  assert.equal(chat.status, "ready");
+  assert.deepEqual(answer.metadata.toolSteps, [
+    { step: 1, tools: ["aktualnyCzas"] }, { step: 2, tools: ["swieta"] }, { step: 3, tools: ["kalkulator"] },
+  ]);
+  assert.equal(answer.metadata.statistics.toolCalls, 3);
+  assert.equal(answer.metadata.statistics.steps, 4);
+  assert.match(answer.parts.find(({ type }) => type === "text").text, /240 paczek/);
+});
+
+test("awaria modelu w drugim kroku pokazuje numer kroku i zachowuje datę", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-22T12:00:00Z") });
+  let modelCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => ++modelCalls === 1
+    ? streamReply({ name: "aktualnyCzas", id: "clock" })
+    : Response.json({ error: { message: "SZCZEGÓŁY AWARII DOSTAWCY" } }, { status: 503 }));
+  const chat = client();
+  await chat.sendMessage({ text: shippingRequest });
+  const answer = chat.messages.at(-1);
+  const text = answer.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  assert.equal(chat.status, "ready");
+  assert.equal(modelCalls, 2);
+  assert.equal(answer.metadata.statistics.steps, 2);
+  assert.equal(answer.metadata.statistics.toolCalls, 1);
+  assert.match(text, /Zadanie przerwało się na kroku 2/);
+  assert.match(text, /Zebrane informacje:\n• 22\.11\.2026/);
+  assert.doesNotMatch(text, /SZCZEGÓŁY AWARII DOSTAWCY/);
 });
 
 test("w trybie deweloperskim limit 16 obejmuje wywołania w jednym kroku i natywne wyszukiwanie", async (t) => {
@@ -621,6 +678,7 @@ test("po błędzie pomija powtórzenie w kolejce i pokazuje wynik częściowy or
   assert.equal(modelCalls, 2);
   assert.equal(answer.metadata.statistics.toolCalls, 2);
   assert.deepEqual(answer.metadata.usedTools, ["kalkulator", "pogoda"]);
+  assert.match(text, /Krok 1: nie udało się wykonać narzędzia/);
   assert.match(text, /Nie znaleziono takiego miasta/);
   assert.match(text, /Wynik obliczenia: 5/);
 });

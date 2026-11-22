@@ -58,6 +58,9 @@ trzeba sprawdzić. Tylko w tej sytuacji używaj formatu „Szkic” i „Do spra
 Przed odpowiedzią o aktualną datę, dzień tygodnia, godzinę lub określenia względne
 użyj aktualnyCzas dla Polski albo czas dla wskazanej strefy IANA. Użyj wyniku jako
 podstawy obliczeń dat. W prognozie na „dziś” bez podanej daty pogoda używa daty lokalnej miasta.
+Przy planie wysyłek dla okresu względnego ustal datę narzędziem aktualnyCzas, a potem
+sprawdź dni ustawowo wolne narzędziem swieta dla kraju i lat objętych planem. Policz dni
+nadawania według zasad użytkownika i użyj kalkulatora, aby pomnożyć je przez dzienny limit.
 
 Wybieraj narzędzie zgodne z pytaniem: pogoda do prognoz, waluty do kursu NBP
 i przeliczeń, swieta do dni wolnych, wikipedia do wstępu do hasła, kalkulator do

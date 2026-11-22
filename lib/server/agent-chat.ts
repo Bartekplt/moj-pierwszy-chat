@@ -18,6 +18,7 @@ import { decodeDocument, type ChatDocument } from "./document-input.ts";
 import { createPdfTool } from "./pdf-tool.ts";
 import { createSpreadsheetTool } from "./spreadsheet-tool.ts";
 import {
+  APICallError,
   convertToModelMessages,
   createUIMessageStreamResponse,
   isStepCount,
@@ -179,6 +180,7 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
     } });
     const instructions = `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`;
     let summaryStep: number | undefined;
+    let toolFailureStep: number | undefined;
     let hitStepLimit = false;
     const result = streamText({
       model: trackedModel,
@@ -213,14 +215,16 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
       includeRawChunks: true,
       toolCallConcurrency: 1,
       maxRetries: 0,
-      onStepEnd: ({ content }) => {
-        if (task.failure || summaryStep) return;
-        for (const part of content) {
-          if (part.type !== "tool-error" || !Object.hasOwn(chatToolLabels, part.toolName)) continue;
-          const name = part.toolName as ChatToolName;
-          task.recordFailure(name, name === "generujObraz" ? imageFailureMessages.input : "Narzędzie zwróciło błąd.");
-          break;
+      onStepEnd: ({ content, stepNumber }) => {
+        if (!task.failure && !summaryStep) {
+          for (const part of content) {
+            if (part.type !== "tool-error" || !Object.hasOwn(chatToolLabels, part.toolName)) continue;
+            const name = part.toolName as ChatToolName;
+            task.recordFailure(name, name === "generujObraz" ? imageFailureMessages.input : "Narzędzie zwróciło błąd.");
+            break;
+          }
         }
+        if (task.failure) toolFailureStep ??= stepNumber + 1;
       },
       // Szczegóły błędów dostawcy nie trafiają do przeglądarki ani logów.
       onError: () => {},
@@ -231,24 +235,37 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
     let hasText = false;
     let finalStepHasText = false;
     let finalStepFailed = false;
+    let modelFailure: { step: number; message: string } | undefined;
     let canceled = false;
     let limitReported = false;
     const observations = new Set<string>();
     const invalidImageCalls = new Set<string>();
 
+    function reportModelFailure(error: unknown) {
+      const status = APICallError.isInstance(error) ? error.statusCode : undefined;
+      const detail = searchDeadline?.aborted ? `OpenRouter: ${sourceTimeoutMessage}.`
+        : status === 429 ? "OpenRouter ograniczył liczbę żądań."
+        : status === 402 ? "OpenRouter zgłosił brak środków."
+        : status === 401 || status === 403 ? "OpenRouter odmówił dostępu do modelu."
+        : status !== undefined && status >= 500 ? "OpenRouter nie mógł dokończyć żądania." : "";
+      const problem = vision ? "Nie udało się przeanalizować zdjęcia." : "Nie udało się uzyskać odpowiedzi modelu.";
+      modelFailure ??= { step: Math.max(modelCalls, startedSteps, 1), message: `${problem}${detail ? ` ${detail}` : ""}` };
+    }
+
     function reportStop(controller: TransformStreamDefaultController<ChatStreamPart>) {
       if (limitReported || canceled || request.signal.aborted) return;
       const messages = [
-        task.deadline.aborted && "Zatrzymałem się po 60 sekundach.",
+        task.deadline.aborted && `Zatrzymałem się po 60 sekundach, na kroku ${Math.max(modelCalls, startedSteps, 1)}.`,
         !task.deadline.aborted && hitStepLimit && `Zatrzymałem się po ${chatStepLimit} krokach`,
         task.count() >= task.toolLimit && `Zatrzymałem się po ${task.toolLimit} wywołaniach narzędzi.`,
-        task.failure && `Nie udało się wykonać narzędzia „${chatToolLabels[task.failure.name]}”. ${task.failure.message}`,
-        searchDeadline?.aborted && `Nie udało się uzyskać odpowiedzi z OpenRouter: ${sourceTimeoutMessage}.`,
+        task.failure && `Krok ${toolFailureStep ?? Math.max(startedSteps, 1)}: nie udało się wykonać narzędzia „${chatToolLabels[task.failure.name]}”. ${task.failure.message}`,
+        modelFailure && (hitStepLimit && modelFailure.step === chatStepLimit ? modelFailure.message
+          : `Zadanie przerwało się na kroku ${modelFailure.step}. ${modelFailure.message}`),
       ].filter(Boolean);
       if (!messages.length) return;
       limitReported = true;
       const id = "agent-step-limit";
-      const needsFallback = finalStepFailed || !finalStepHasText;
+      const needsFallback = finalStepFailed || !finalStepHasText || Boolean(task.failure);
       const fallback = observations.size
         ? `\n\nZebrane informacje:\n${[...observations].map((text) => `• ${text}`).join("\n")}`
         : "\n\nNie udało się potwierdzić wyniku przed końcem zadania.";
@@ -276,11 +293,13 @@ export async function chatResponse(request: Request, body: unknown, startedAt = 
         if (part.type === "abort") {
           canceled = request.signal.aborted;
           finalStepFailed = true;
+          if (!canceled && !task.deadline.aborted) reportModelFailure(undefined);
           reportStop(controller);
         }
-        if (part.type === "error" && (summaryStep || task.deadline.aborted || searchDeadline?.aborted)) {
-          // Błąd podsumowania nie powinien zastąpić wyników z poprzednich kroków.
+        if (part.type === "error") {
+          // Błąd modelu nie powinien zastąpić wyników z poprzednich kroków.
           finalStepFailed = true;
+          if (!request.signal.aborted && !task.deadline.aborted) reportModelFailure(part.error);
           return;
         }
         if (part.type === "tool-result" && !part.dynamic && !part.preliminary && observations.size < 8) {
