@@ -449,6 +449,7 @@ test("dziesięciokrokowy plan obliczeń używa tylko narzędzia wskazanego na da
   const steps = ["1. **Waluty:** przelicz 480 EUR.", ...operations.map(({ operacja }, index) =>
     `${index + 2}. **Kalkulator:** wykonaj działanie ${operacja} na wyniku poprzedniego kroku.`),
   "10. **Podsumowanie:** podaj dzienny zysk i różnicę do celu."];
+  const previousResults = ["480 EUR = 2040 PLN", "2220", "18.5", "19.7", "19.3", "1544", "1224", "306", "56"];
   let modelCalls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (new URL(url).hostname === "api.nbp.pl") {
@@ -457,6 +458,15 @@ test("dziesięciokrokowy plan obliczeń używa tylko narzędzia wskazanego na da
     const body = JSON.parse(options.body);
     const step = ++modelCalls;
     assert.ok(!body.tools?.some(({ type }) => type === "openrouter:web_search"));
+    if (body.messages.some(({ role, tool_calls }) => role === "tool" || tool_calls?.length)) {
+      return Response.json({ error: { message: "Provider rejected previous tool-call history" } }, { status: 400 });
+    }
+    if (step > 1) {
+      const context = JSON.stringify(body.messages.at(-1).content);
+      for (const [index, value] of previousResults.slice(0, step - 1).entries()) {
+        assert.ok(context.includes(`${index + 1}. ${index ? "Wynik obliczenia: " : ""}${value}`));
+      }
+    }
     if (step === 10) {
       assert.equal(body.tool_choice, "none");
       return streamReply({ text: "306 zł dziennie, czyli 56 zł powyżej celu." });
