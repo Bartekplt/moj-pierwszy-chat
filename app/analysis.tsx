@@ -75,7 +75,7 @@ export default function MessageAnalysis({ leaving }: { leaving: boolean }) {
   }
 
   return (
-    <section aria-label="Analiza wiadomości klienta sklepu">
+    <section className="analysis-panel" aria-label="Analiza wiadomości klienta sklepu">
       <p className="status">Wklej wiadomość klienta sklepu, aby określić kategorię i priorytet oraz przygotować szkic odpowiedzi.</p>
       <form onSubmit={analyze}>
         <label htmlFor="analysis-message">Wiadomość klienta</label>

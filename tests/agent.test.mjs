@@ -5,7 +5,7 @@ import { DefaultChatTransport } from "ai";
 import ExcelJS from "exceljs";
 import { JWT } from "google-auth-library";
 import { POST } from "../app/api/agent/route.ts";
-import { prepareAgentMessages } from "../lib/chat.ts";
+import { chatToolLabels, markChatInterrupted, prepareAgentMessages } from "../lib/chat.ts";
 import { createSession, SESSION_COOKIE } from "../lib/server/session.ts";
 import { generatePicture, validateImagePrompt } from "../lib/server/image-generation.ts";
 import { imageFailureMessages } from "../lib/image-errors.ts";
@@ -23,10 +23,13 @@ const headers = () => ({ "Content-Type": "application/json", Origin: "http://loc
 const request = (body, extraHeaders = {}) => new Request("http://localhost/api/agent", {
   method: "POST", headers: { ...headers(), ...extraHeaders }, body: JSON.stringify(body),
 });
-function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText = "" } = {}) {
-  const delta = name ? { tool_calls: [{ index: 0, id, type: "function", function: {
-    name, arguments: JSON.stringify(input),
-  } }], ...(prefixText ? { content: prefixText } : {}) } : { content: "Gotowe." };
+function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText = "", calls, text = "Gotowe." } = {}) {
+  const toolCalls = calls ?? (name ? [{ name, input, id }] : []);
+  const delta = toolCalls.length ? {
+    tool_calls: toolCalls.map(({ name, input, id }, index) => ({
+      index, id, type: "function", function: { name, arguments: JSON.stringify(input) },
+    })), ...(prefixText ? { content: prefixText } : {}),
+  } : { content: text };
   const data = (delta, finish_reason) => `data: ${JSON.stringify({
     id: "reply", model: "test/actual-chat-model", created: 0,
     choices: [{ index: 0, delta, finish_reason }],
@@ -34,12 +37,12 @@ function streamReply({ name, input = {}, id = "call-1", sources = [], prefixText
   const annotations = sources.length ? data({ annotations: sources.map((url) => ({
     type: "url_citation", url_citation: { url, title: "Źródło testowe" },
   })) }, null) : "";
-  return new Response(annotations + data(delta, null) + data({}, name ? "tool_calls" : "stop") + "data: [DONE]\n\n", {
+  return new Response(annotations + data(delta, null) + data({}, toolCalls.length ? "tool_calls" : "stop") + "data: [DONE]\n\n", {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
-function client(browserRequests = [], sessionHeaders = headers()) {
-  return new Chat({ transport: new DefaultChatTransport({
+function client(browserRequests = [], sessionHeaders = headers(), onFinish) {
+  return new Chat({ onFinish, transport: new DefaultChatTransport({
     api: "/api/agent",
     prepareSendMessagesRequest: ({ messages }) => ({ body: { mode: "chat", messages: prepareAgentMessages(messages) } }),
     fetch: async (_url, options) => {
@@ -48,6 +51,119 @@ function client(browserRequests = [], sessionHeaders = headers()) {
     },
   }) });
 }
+
+test("narzędzia codzienne działają przez czat, a Wikipedia i rejestr UE dodają źródła i etykiety", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-21T12:00:00Z") });
+  const calls = [
+    ["pogoda", { miasto: "Warszawa", data: "2026-11-21", kraj: "pl" }],
+    ["waluty", { waluta: "eur", kwota: 10 }],
+    ["swieta", { kraj: "PL", rok: 2026 }],
+    ["wikipedia", { haslo: "Warszawa" }],
+    ["oswiadczeniaZdrowotneUE", { skladnik: "witamina C", status: "dopuszczone" }],
+    ["kalkulator", { operacja: "pomnoz", a: 17, b: 23 }],
+    ["czas", { strefa: "Asia/Tokyo" }],
+    ["notatki", { operacja: "zapisz", tresc: "Sprawdzić stany magazynowe" }],
+    ["diagnostyka", {}],
+  ];
+  const data = new Map([
+    ["geocoding-api.open-meteo.com", { results: [{ name: "Warszawa", latitude: 52.23, longitude: 21.01, country_code: "PL" }] }],
+    ["api.open-meteo.com", { timezone: "Europe/Warsaw", daily: {
+      time: ["2026-11-21"], weather_code: [3], temperature_2m_min: [1], temperature_2m_max: [4], precipitation_probability_max: [40],
+    } }],
+    ["api.nbp.pl", { code: "EUR", rates: [{ mid: 4.25, effectiveDate: "2026-11-20" }] }],
+    ["nagerholidays.com", [
+      { date: "2026-01-01", name: "New Year's Day", nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Public"] },
+      { date: "2026-08-15", name: "Regional holiday", nationalHoliday: false, subdivisionCodes: ["PL-01"], holidayTypes: ["Public"] },
+      { date: "2026-12-31", name: "Bank holiday", nationalHoliday: true, subdivisionCodes: null, holidayTypes: ["Bank"] },
+    ]],
+    ["pl.wikipedia.org", { query: { pages: [{ ns: 0, pageid: 6605, title: "Warszawa", extract: "Stolica Polski." }] } }],
+  ]);
+  const modelRequests = [];
+  const publicRequests = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    const address = new URL(url);
+    if (address.hostname !== "openrouter.ai") {
+      publicRequests.push(address);
+      assert.equal(options.headers.Authorization, undefined);
+      assert.equal(options.headers.Cookie, undefined);
+      if (address.hostname === "api.datalake.sante.service.ec.europa.eu") {
+        return new Response(JSON.stringify({
+          policy_item_code: "POL-HC-6510", nutrient_subst_food_no_html: "Vitamin C",
+          claim_status: "Authorised", claim: "<p>Vitamin C contributes to the normal function of the immune system.</p>",
+          condition_of_use: "The food must be at least a source of vitamin C.", restrictions_of_use: null,
+          reasons_of_non_authorisation: null, proprietary_data: "No", restriction_expiry_date: null,
+        }));
+      }
+      assert.ok(data.has(address.hostname));
+      assert.equal(options.headers.Accept, "application/json");
+      return Response.json(data.get(address.hostname));
+    }
+    modelRequests.push(JSON.parse(options.body));
+    if (modelRequests.length > 1) return streamReply();
+    const event = (delta, finish_reason) => `data: ${JSON.stringify({
+      id: "tool-suite", model: "test/actual-chat-model", created: 0,
+      choices: [{ index: 0, delta, finish_reason }],
+    })}\n\n`;
+    const toolCalls = calls.map(([name, input], index) => ({
+      index, id: `suite-${index}`, type: "function", function: { name, arguments: JSON.stringify(input) },
+    }));
+    return new Response(event({ tool_calls: toolCalls }, null) + event({}, "tool_calls") + "data: [DONE]\n\n", {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+
+  const chat = client();
+  await chat.sendMessage({ text: "Sprawdź prognozę, kurs, święta i Wikipedię. Oblicz 17 × 23, podaj czas w Tokio, zapisz notatkę i wykonaj diagnostykę." });
+  assert.equal(chat.status, "ready");
+  assert.equal(modelRequests.length, 2);
+  for (const expected of [
+    ["geocoding-api.open-meteo.com", "/v1/search", "countryCode", "PL"],
+    ["api.open-meteo.com", "/v1/forecast", "end_date", "2026-11-21"],
+    ["api.nbp.pl", "/api/exchangerates/rates/a/eur/2026-11-07/2026-11-21/"],
+    ["nagerholidays.com", "/api/v4/Holidays/PL/2026"],
+    ["pl.wikipedia.org", "/w/api.php", "titles", "Warszawa"],
+    ["api.datalake.sante.service.ec.europa.eu", "/health-claims/download-eu-register", "api-version", "v2.0"],
+  ]) {
+    const [host, path, key, value] = expected;
+    assert.ok(publicRequests.some((url) => url.hostname === host && url.pathname === path && (!key || url.searchParams.get(key) === value)));
+  }
+  const answer = chat.messages.at(-1);
+  assert.deepEqual(answer.metadata.usedTools, calls.map(([name]) => name));
+  assert.deepEqual(answer.metadata.toolSteps, [{ step: 1, tools: calls.map(([name]) => name) }]);
+  assert.equal(answer.metadata.statistics.steps, 2);
+  assert.equal(answer.metadata.statistics.toolCalls, calls.length);
+  assert.ok(answer.metadata.statistics.elapsedMs >= 0);
+  const outputs = Object.fromEntries(answer.parts.filter((part) => part.state === "output-available")
+    .map((part) => [part.type.slice(5), part.output]));
+  assert.deepEqual(Object.keys(outputs).sort(), calls.map(([name]) => name).sort());
+  for (const output of Object.values(outputs)) assert.ok(Number.isFinite(Date.parse(output.pobrano)));
+  assert.equal(outputs.pogoda.warunki, "pochmurno");
+  assert.equal(outputs.waluty.wynik, 42.5);
+  assert.equal(outputs.swieta.dniWolne.length, 2);
+  assert.deepEqual(outputs.swieta.dniWolne[1].regiony, ["PL-01"]);
+  assert.equal(outputs.wikipedia.streszczenie, "Stolica Polski.");
+  assert.ok(answer.parts.some((part) => part.type === "source-url" && part.url === "https://pl.wikipedia.org/?curid=6605"));
+  assert.equal(answer.metadata.retrievedAt, outputs.wikipedia.pobrano);
+  const claim = outputs.oswiadczeniaZdrowotneUE.wyniki[0];
+  assert.equal(claim.status, "dopuszczone");
+  assert.equal(claim.warunkiUzycia, "The food must be at least a source of vitamin C.");
+  assert.ok(answer.parts.some((part) => part.type === "source-url" && part.url.endsWith("/details/POL-HC-6510")));
+  assert.equal(outputs.kalkulator.wynik, 391);
+  assert.equal(outputs.czas.strefa, "Asia/Tokyo");
+  assert.equal(outputs.notatki.zapisano, true);
+  assert.equal(outputs.diagnostyka.model, "test/chat-model");
+  assert.equal(outputs.diagnostyka.limitKrokow, 6);
+  assert.deepEqual(outputs.diagnostyka.narzedzia.sort(), Object.keys(chatToolLabels).sort());
+  assert.deepEqual(outputs.diagnostyka.zmienneUstawione, {
+    CHAT_PASSWORD: true, SESSION_SECRET: true, OPENROUTER_API_KEY: true, OPENROUTER_MODEL: true,
+  });
+  const serialized = JSON.stringify(outputs.diagnostyka);
+  for (const secret of [process.env.CHAT_PASSWORD, process.env.SESSION_SECRET, process.env.OPENROUTER_API_KEY]) {
+    assert.ok(!serialized.includes(secret));
+  }
+  await chat.sendMessage({ text: "Dziękuję." });
+  assert.equal(chat.status, "ready");
+});
 
 function samplePdf(text = "Oferta hurtowa: 65 PLN", content = `BT /F1 14 Tf 20 100 Td (${text}) Tj ET`) {
   let pdf = "%PDF-1.4\n";
@@ -296,16 +412,25 @@ test("błąd generowania pozostaje błędem narzędzia, bez danych dostawcy i po
   assert.equal(imageCalls, 1);
 });
 
-test("agent kończy pętlę po pięciu krokach nawet przy kolejnych wywołaniach narzędzi", async () => {
+test("szósty krok nie wykonuje narzędzia i pokazuje zebrane dane, gdy model nie podsumuje wyników", async () => {
   let calls = 0;
-  globalThis.fetch = async () => streamReply({ name: "aktualnyCzas", id: `clock-${++calls}` });
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    if (calls === 6) {
+      const body = JSON.parse(options.body);
+      assert.equal(body.tool_choice, "none");
+      assert.match(JSON.stringify(body.messages), /To ostatni krok\. Podsumuj/);
+    }
+    return streamReply({ name: "kalkulator", input: { operacja: "pomnoz", a: 17, b: 23 }, id: `calc-${calls}` });
+  };
   const chat = client();
-  await chat.sendMessage({ text: "Jaki dziś dzień?" });
+  await chat.sendMessage({ text: "Pomnóż 17 przez 23." });
   assert.equal(chat.status, "ready");
-  assert.equal(calls, 5);
+  assert.equal(calls, 6);
   const answer = chat.messages.at(-1);
-  assert.deepEqual(answer.metadata.usedTools, Array(5).fill("aktualnyCzas"));
-  assert.equal(answer.parts.filter((part) => part.type === "text").map((part) => part.text).join(""), "Przerwałem po 5 krokach");
+  assert.deepEqual(answer.metadata.usedTools, Array(5).fill("kalkulator"));
+  assert.equal(answer.parts.filter((part) => part.type === "text").map((part) => part.text).join(""),
+    "Zatrzymałem się po 6 krokach\n\nZebrane informacje:\n• Wynik obliczenia: 391.");
 });
 
 test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł nie dubluje wyszukiwania", async () => {
@@ -330,6 +455,11 @@ test("etykiety zachowują kolejność i powtórzenia narzędzi, wiele źródeł 
   await chat.sendMessage({ text: "Zbierz informacje, a potem stwórz ilustrację." });
   assert.equal(chat.status, "ready");
   assert.deepEqual(chat.messages.at(-1).metadata.usedTools, ["aktualnyCzas", "web_search", "aktualnyCzas", "generujObraz"]);
+  assert.deepEqual(chat.messages.at(-1).metadata.toolSteps, [
+    { step: 1, tools: ["aktualnyCzas"] },
+    { step: 2, tools: ["web_search", "aktualnyCzas"] },
+    { step: 3, tools: ["generujObraz"] },
+  ]);
   assert.equal(calls, 4);
 });
 
@@ -345,15 +475,218 @@ test("naturalne zakończenie odpowiedzi w piątym kroku nie jest oznaczane jako 
   assert.equal(text, "Gotowe.");
 });
 
-test("przy limicie zachowuje wcześniejszy tekst i dopisuje komunikat dokładnie raz", async () => {
+test("przy limicie zachowuje tekst z wcześniejszych kroków oraz ostatnie podsumowanie", async () => {
   let calls = 0;
-  globalThis.fetch = async () => streamReply({ name: "aktualnyCzas", id: `clock-${++calls}`,
-    prefixText: calls === 1 ? "Zbieram informacje." : "" });
+  globalThis.fetch = async () => ++calls < 6
+    ? streamReply({ name: "aktualnyCzas", id: `clock-${calls}`, prefixText: calls === 1 ? "Zbieram informacje. " : "" })
+    : streamReply();
   const chat = client();
   await chat.sendMessage({ text: "Sprawdź daty." });
   const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
-  assert.equal(text, "Zbieram informacje.\n\nPrzerwałem po 5 krokach");
-  assert.equal(calls, 5);
+  assert.equal(text, "Zbieram informacje. Gotowe.\n\nZatrzymałem się po 6 krokach");
+  assert.equal(calls, 6);
+});
+
+test("awaria modelu podczas podsumowania zachowuje ustalenia i komunikat o limicie", async () => {
+  let calls = 0;
+  globalThis.fetch = async () => ++calls === 6
+    ? new Response("SZCZEGÓŁY AWARII DOSTAWCY", { status: 503 })
+    : streamReply({ name: "kalkulator", id: `count-${calls}`, input: { operacja: "dodaj", a: 2, b: 3 } });
+  const chat = client();
+  await chat.sendMessage({ text: "Oblicz 2 + 3" });
+  const text = chat.messages.at(-1).parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  assert.equal(chat.status, "ready");
+  assert.equal(calls, 6);
+  assert.equal(text, "Zatrzymałem się po 6 krokach\n\nZebrane informacje:\n• Wynik obliczenia: 5.");
+});
+
+test("w trybie deweloperskim limit 16 obejmuje wywołania w jednym kroku i natywne wyszukiwanie", async (t) => {
+  const environment = process.env.NODE_ENV;
+  t.after(() => { process.env.NODE_ENV = environment; });
+  process.env.NODE_ENV = "development";
+  let modelCalls = 0;
+  let apiCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (new URL(url).hostname === "api.nbp.pl") {
+      apiCalls++;
+      const date = new URL(url).pathname.split("/").at(-2);
+      return Response.json({ code: "EUR", rates: [{ mid: 4.25, effectiveDate: date }] });
+    }
+    const body = JSON.parse(options.body);
+    assert.equal(body.max_tool_calls, 1);
+    if (++modelCalls === 1) return streamReply({
+      sources: ["https://example.com/a", "https://example.com/b"],
+      calls: Array.from({ length: 20 }, (_, index) => ({
+        name: "waluty", input: { waluta: "EUR", kwota: index }, id: `rate-${index}`,
+      })),
+    });
+    assert.equal(body.tool_choice, "none");
+    assert.ok(!body.tools.some(({ type }) => type === "openrouter:web_search"));
+    return streamReply();
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Wyszukaj informacje i przelicz kwoty." });
+  const answer = chat.messages.at(-1);
+  assert.equal(chat.status, "ready");
+  assert.equal(modelCalls, 2);
+  assert.equal(apiCalls, 15);
+  assert.equal(answer.metadata.statistics.toolCalls, 16);
+  assert.equal(answer.metadata.statistics.steps, 2);
+  assert.equal(answer.metadata.usedTools.length, 16);
+  assert.ok(answer.parts.some((part) => part.type === "text" && part.text.includes("Zatrzymałem się po 16 wywołaniach")));
+});
+
+test("Stop anuluje aktywne żądanie modelu i zachowuje tekst oraz wynik narzędzia", async (t) => {
+  let modelCalls = 0;
+  const pending = Promise.withResolvers();
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    if (++modelCalls === 1) return streamReply({
+      name: "kalkulator", input: { operacja: "dodaj", a: 2, b: 3 }, prefixText: "Zacząłem obliczenia.",
+    });
+    pending.resolve(signal);
+    return new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  const chat = client([], headers(), ({ isAbort, message }) => {
+    if (isAbort) chat.messages = markChatInterrupted(chat.messages, message);
+  });
+  const receivedResult = Promise.withResolvers();
+  const unsubscribe = chat["~registerMessagesCallback"](() => {
+    if (chat.messages.at(-1)?.metadata?.partialResults?.length) receivedResult.resolve();
+  });
+  t.after(unsubscribe);
+  const response = chat.sendMessage({ text: "Oblicz, ile to 2 + 3." });
+  const [signal] = await Promise.all([pending.promise, receivedResult.promise]);
+  await chat.stop();
+  await response;
+  assert.equal(signal.aborted, true);
+  assert.equal(chat.status, "ready");
+  assert.equal(modelCalls, 2);
+  assert.equal(chat.messages.length, 2);
+  const answer = chat.messages.at(-1);
+  assert.equal(answer.metadata.interrupted, true);
+  assert.deepEqual(answer.metadata.partialResults, ["Wynik obliczenia: 5."]);
+  assert.ok(answer.parts.some((part) => part.type === "text" && part.text === "Zacząłem obliczenia."));
+});
+
+test("Stop przed pierwszą odpowiedzią zostawia dopisek i można wysłać kolejną wiadomość", async (t) => {
+  let modelCalls = 0;
+  const pending = Promise.withResolvers();
+  t.mock.method(globalThis, "fetch", async (_url, { signal }) => {
+    if (++modelCalls > 1) return streamReply();
+    pending.resolve(signal);
+    return new Promise((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  });
+  const browserRequests = [];
+  const chat = client(browserRequests, headers(), ({ isAbort, message }) => {
+    if (isAbort) chat.messages = markChatInterrupted(chat.messages, message);
+  });
+  const response = chat.sendMessage({ text: "Zacznij pracę." });
+  const signal = await pending.promise;
+  await chat.stop();
+  await response;
+  assert.equal(signal.aborted, true);
+  assert.equal(chat.messages.at(-1).metadata.interrupted, true);
+  await chat.sendMessage({ text: "Nowe pytanie." });
+  assert.equal(chat.status, "ready");
+  assert.equal(chat.messages.at(-1).parts.find((part) => part.type === "text").text, "Gotowe.");
+  assert.equal(browserRequests[1].messages.length, 2);
+});
+
+test("po błędzie pomija powtórzenie w kolejce i pokazuje wynik częściowy oraz przyczynę", async () => {
+  let modelCalls = 0;
+  let weatherCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (new URL(url).hostname === "geocoding-api.open-meteo.com") {
+      weatherCalls++;
+      return Response.json({});
+    }
+    if (++modelCalls === 1) return streamReply({ calls: [
+      { name: "kalkulator", input: { operacja: "dodaj", a: 2, b: 3 }, id: "calc" },
+      { name: "pogoda", input: { miasto: "Nieistniejące miasto" }, id: "weather" },
+      { name: "pogoda", input: { miasto: "Nieistniejące miasto" }, id: "weather-repeat" },
+    ] });
+    assert.equal(JSON.parse(options.body).tool_choice, "none");
+    return streamReply({ text: "" });
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Oblicz 2 + 3 i sprawdź pogodę." });
+  const answer = chat.messages.at(-1);
+  const text = answer.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  assert.equal(chat.status, "ready");
+  assert.equal(weatherCalls, 1);
+  assert.equal(modelCalls, 2);
+  assert.equal(answer.metadata.statistics.toolCalls, 2);
+  assert.deepEqual(answer.metadata.usedTools, ["kalkulator", "pogoda"]);
+  assert.match(text, /Nie znaleziono takiego miasta/);
+  assert.match(text, /Wynik obliczenia: 5/);
+});
+
+test("przekroczenie czasu narzędzia pokazuje czytelny błąd i przerywa ponawianie", async (t) => {
+  const originalTimeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", (ms) => originalTimeout(ms === 10_000 ? 40 : ms));
+  let modelCalls = 0;
+  let weatherCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (new URL(url).hostname === "geocoding-api.open-meteo.com") {
+      weatherCalls++;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return Response.json({});
+    }
+    if (++modelCalls === 1) return streamReply({ name: "pogoda", input: { miasto: "Warszawa" } });
+    assert.equal(JSON.parse(options.body).tool_choice, "none");
+    return streamReply({ text: "" });
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Sprawdź pogodę w Warszawie." });
+  const answer = chat.messages.at(-1);
+  const weather = answer.parts.find((part) => part.type === "tool-pogoda");
+  assert.equal(weather.state, "output-error");
+  assert.equal(weather.errorText, "źródło nie odpowiada");
+  assert.equal(weatherCalls, 1);
+  assert.equal(modelCalls, 2);
+  assert.equal(answer.metadata.statistics.toolCalls, 1);
+});
+
+test("limit czasu całego zadania kończy strumień ze statystykami i zebranym wynikiem", async (t) => {
+  const originalTimeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", (ms) => originalTimeout(ms > 59_000 ? 45 : ms));
+  let modelCalls = 0;
+  globalThis.fetch = async () => {
+    if (++modelCalls === 1) return streamReply({ name: "kalkulator", input: { operacja: "dodaj", a: 2, b: 3 } });
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    return streamReply();
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Zbierz wyniki po obliczeniu." });
+  const answer = chat.messages.at(-1);
+  const text = answer.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
+  assert.equal(answer.metadata.statistics.steps, 2);
+  assert.equal(answer.metadata.statistics.toolCalls, 1);
+  assert.match(text, /Zatrzymałem się po 60 sekundach/);
+  assert.match(text, /Wynik obliczenia: 5/);
+});
+
+test("limit czasu wyszukiwania natywnego przerywa żądanie do OpenRouter", async (t) => {
+  const originalTimeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", (ms) => originalTimeout(ms === 10_000 ? 35 : ms));
+  let signal;
+  globalThis.fetch = async (_url, options) => {
+    signal = options.signal;
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    return streamReply();
+  };
+  const chat = client();
+  await chat.sendMessage({ text: "Wyszukaj informacje." });
+  const answer = chat.messages.at(-1);
+  assert.equal(chat.status, "ready");
+  assert.equal(signal.aborted, true);
+  assert.equal(answer.metadata.statistics.steps, 1);
+  assert.equal(answer.metadata.statistics.toolCalls, 0);
+  assert.ok(answer.parts.some((part) => part.type === "text" && part.text.includes("źródło nie odpowiada")));
 });
 
 test("walidacja opisów obrazu, odmowa oraz brak identyfikatora z API", async () => {

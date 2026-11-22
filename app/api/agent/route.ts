@@ -13,13 +13,14 @@ export async function POST(request: Request) {
   }, { status: 401, headers: { "Cache-Control": "no-store" } });
   if (!isSameOrigin(request)) return Response.json({ error: "Niedozwolone pochodzenie żądania." }, { status: 403 });
 
+  const startedAt = performance.now();
   let body: unknown;
   try { body = await request.json(); }
   catch { return Response.json({ error: "Nieprawidłowe dane JSON." }, { status: 400 }); }
   if (!body || typeof body !== "object" || Array.isArray(body) || !("mode" in body)) {
     return Response.json({ error: "Nie wskazano trybu agenta." }, { status: 400 });
   }
-  if (body.mode === "chat") return chatResponse(request, body);
+  if (body.mode === "chat") return chatResponse(request, body, startedAt);
   if (body.mode === "analyze") return analysisResponse(request, body);
   if (body.mode === "sheet-write") return googleWriteResponse(request, body);
   return Response.json({ error: "Nieznany tryb agenta." }, { status: 400 });

@@ -2,11 +2,15 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart } from "ai";
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import MessageAnalysis from "./analysis";
 import GeneratedImageView from "./generated-image";
 import SpreadsheetResult from "./spreadsheet-result";
-import { chatToolLabels, prepareAgentMessages, type ChatMessage } from "../lib/chat";
+import CurrencyResult from "./currency-result";
+import ThemeSwitch from "./theme-switch";
+import ToolSteps from "./tool-steps";
+import { markChatInterrupted, prepareAgentMessages, type ChatMessage } from "../lib/chat";
 import { IMAGE_PROMPTS, imageFailureToShow, isGeneratedImage, matchesImageType, photoSelectionError } from "../lib/images";
 import { DOCUMENT_INPUT_ERROR, DOCUMENT_LIMIT, DOCUMENT_REQUEST_ERROR, DOCUMENT_TYPES, documentType, matchesDocumentType } from "../lib/documents";
 
@@ -25,6 +29,8 @@ const transport = new DefaultChatTransport<ChatMessage>({
   },
 });
 
+const elapsedSeconds = new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 export default function Chat() {
   const [mode, setMode] = useState<"chat" | "analysis">("chat");
   const [message, setMessage] = useState("");
@@ -37,12 +43,19 @@ export default function Chat() {
   const fileInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
   const requestPending = useRef(false);
-  const { messages, sendMessage: sendChatMessage, status, error, stop, setMessages } = useChat<ChatMessage>({ transport });
+  const stopRequested = useRef(false);
+  const { messages, sendMessage: sendChatMessage, status, error, stop, setMessages } = useChat<ChatMessage>({
+    transport,
+    onFinish: ({ isAbort, message }) => {
+      if (isAbort && stopRequested.current) setMessages((history) => markChatInterrupted(history, message));
+    },
+  });
   const generating = imageRequested || (status === "streaming" && messages.at(-1)?.parts.some((part) =>
     (part.type === "tool-generujObraz" || (part.type === "dynamic-tool" && part.toolName === "generujObraz")) &&
     (part.state === "input-streaming" || part.state === "input-available"),
   )) === true;
-  const waiting = status === "submitted" || status === "streaming" || generating || readingAttachment;
+  const agentWorking = status === "submitted" || status === "streaming";
+  const waiting = agentWorking || generating || readingAttachment;
   const conversation = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -55,6 +68,13 @@ export default function Chat() {
     : messages.some((item) => item.parts.some((part) => part.type === "file" && part.mediaType.startsWith("image/") && item.role === "user"))
     ? "Nie udało się przeanalizować zdjęcia. Model może być niedostępny lub nie obsługiwać obrazów. Sprawdź konfigurację modelu rozmowy."
     : "Nie udało się uzyskać odpowiedzi. Sprawdź klucz, identyfikator modelu i środki w OpenRouter, a następnie spróbuj ponownie.";
+
+  async function stopAgent() {
+    if (!agentWorking || stopRequested.current) return;
+    stopRequested.current = true;
+    try { await stop(); }
+    finally { stopRequested.current = false; }
+  }
 
   async function logout() {
     if (leaving) return;
@@ -137,12 +157,22 @@ export default function Chat() {
   }
 
   return (
-    <main>
+    <main className={`workspace${mode === "chat" ? " workspace-chat" : ""}`}>
       <header className="chat-header">
-        <h1>Mój chatbot</h1>
-        <button className="secondary" type="button" onClick={logout} disabled={leaving || generating}>
-          {leaving ? "Wychodzę…" : "Wyjdź"}
-        </button>
+        <div className="brand">
+          <span className="chat-mark" aria-hidden="true" />
+          <div>
+            <h1>Mój chatbot</h1>
+            <p>Asystent do codziennej pracy w e-commerce.</p>
+          </div>
+        </div>
+        <div className="header-actions">
+          <Link className="workspace-link" href="/dashboard">Podróże</Link>
+          <ThemeSwitch />
+          <button className="secondary" type="button" onClick={logout} disabled={leaving || generating}>
+            {leaving ? "Wychodzę…" : "Wyjdź"}
+          </button>
+        </div>
       </header>
       <nav className="mode-switch" aria-label="Tryb pracy">
         <button type="button" className={mode === "chat" ? "" : "secondary"} aria-pressed={mode === "chat"}
@@ -151,18 +181,19 @@ export default function Chat() {
           disabled={waiting || leaving} onClick={() => setMode("analysis")}>Analiza JSON</button>
       </nav>
       {logoutError && <p className="error" role="alert">{logoutError}</p>}
-      {mode === "analysis" ? <MessageAnalysis leaving={leaving} /> : <>
+      {mode === "analysis" ? <MessageAnalysis leaving={leaving} /> : <div className="chat-panel">
       <section ref={conversation} className="conversation" aria-label="Rozmowa" role="log" aria-live="polite" aria-busy={waiting}>
+        {messages.length === 0 && (
+          <div className="conversation-empty">
+            <span className="chat-mark" aria-hidden="true" />
+            <h2>W czym mogę pomóc?</h2>
+            <p>Zadaj pytanie, dodaj plik do analizy lub opisz obraz, który chcesz stworzyć.</p>
+          </div>
+        )}
         {messages.map((item) => (
           <div className={`message ${item.role}`} key={item.id}>
             <span className="speaker">{item.role === "user" ? "Ty" : "Chatbot"}</span>
-            {item.role === "assistant" && !!item.metadata?.usedTools?.length && (
-              <ol className="tool-badges" aria-label="Użyte narzędzia w kolejności wywołania">
-                {item.metadata.usedTools.map((name, index) => (
-                  <li className="tool-badge" key={`${index}-${name}`}>{index + 1}. {chatToolLabels[name]}</li>
-                ))}
-              </ol>
-            )}
+            {item.role === "assistant" && <ToolSteps metadata={item.metadata} />}
             {item.parts.map((part, index) => {
               if (part.type === "text") return <span key={index}>{part.text}</span>;
               if (part.type === "tool-generujObraz" || (part.type === "dynamic-tool" && part.toolName === "generujObraz")) {
@@ -181,6 +212,9 @@ export default function Chat() {
               if (part.type === "file" && DOCUMENT_TYPES.includes(part.mediaType)) return <p className="status" key={index}>📎 {part.filename}</p>;
               if (part.type === "tool-arkusze" || (part.type === "dynamic-tool" && part.toolName === "arkusze")) {
                 if (part.state === "output-available") return <SpreadsheetResult key={part.toolCallId} output={part.output} disabled={waiting || leaving} />;
+              }
+              if (part.type === "tool-waluty" || (part.type === "dynamic-tool" && part.toolName === "waluty")) {
+                if (part.state === "output-available") return <CurrencyResult key={part.toolCallId} output={part.output} />;
               }
               return null;
             })}
@@ -210,17 +244,36 @@ export default function Chat() {
                 )}
               </div>
             )}
+            {item.metadata?.interrupted && (
+              <>
+                {!!item.metadata.partialResults?.length && (
+                  <div className="sources">
+                    <strong>Zebrane informacje</strong>
+                    <ul>{item.metadata.partialResults.map((result) => <li key={result}>{result}</li>)}</ul>
+                  </div>
+                )}
+                <small className="model-caption">Przerwane przez użytkownika</small>
+              </>
+            )}
+            {item.role === "assistant" && item.metadata?.statistics && (
+              <small className="model-caption">
+                Kroki: {item.metadata.statistics.steps} · Wywołania narzędzi: {item.metadata.statistics.toolCalls}
+                {" · Czas: "}{elapsedSeconds.format(item.metadata.statistics.elapsedMs / 1000)} s
+              </small>
+            )}
           </div>
         ))}
       </section>
+      <div className="composer-panel">
       {waiting && (
-        <p className="status" role="status">
-          {generating ? "Generuję obraz…" : readingAttachment ? "Wczytuję załącznik…" : status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
+        <p className="activity" role="status">
+          <span className="activity-dot" aria-hidden="true" />
+          {generating ? "Generuję obraz…" : readingAttachment ? "Wczytuję załącznik…" : status === "submitted" ? "Czekam na odpowiedź…" : "Agent pisze…"}
         </p>
       )}
       {error && <p className="error" role="alert">{errorMessage}</p>}
       {imageError && <p className="error" role="alert">{imageError}</p>}
-      <form onSubmit={sendMessage}>
+      <form className="chat-form" onSubmit={sendMessage}>
         <label htmlFor="message">Wiadomość</label>
         <div className="composer">
           <input
@@ -232,9 +285,13 @@ export default function Chat() {
             autoComplete="off"
             disabled={waiting || leaving}
           />
-          <button type="submit" disabled={waiting || leaving || (!message.trim() && !attachment)}>
-            {waiting ? "Czekaj…" : "Wyślij"}
-          </button>
+          {agentWorking ? (
+            <button type="button" className="secondary" onClick={() => void stopAgent()} disabled={leaving}>Stop</button>
+          ) : (
+            <button type="submit" disabled={waiting || leaving || (!message.trim() && !attachment)}>
+              {waiting ? "Czekaj…" : "Wyślij"}
+            </button>
+          )}
         </div>
         <div className="image-suggestions" role="group" aria-label="Podpowiedzi opisów obrazu">
           <small>Pomysły na obraz — kliknij, aby wstawić opis:</small>
@@ -273,7 +330,8 @@ export default function Chat() {
           <button type="button" className="secondary" disabled={waiting || leaving} onClick={() => setAttachment(undefined)}>Usuń załącznik</button>
         </div>}
       </form>
-      </>}
+      </div>
+      </div>}
     </main>
   );
 }

@@ -1,10 +1,15 @@
 import { assistantInstructions } from "./assistant-persona.ts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { aktualnyCzas } from "./chat-tools.ts";
+import { aktualnyCzas, czas, kalkulator, createDiagnosticsTool } from "./chat-tools.ts";
+import { createNotesTool } from "./notes-tool.ts";
+import { pogoda, swieta, waluty, wikipedia } from "./public-data-tools.ts";
+import { oswiadczeniaZdrowotneUE } from "./health-claims-tool.ts";
 import { createImageTool } from "./image-generation.ts";
 import { ImageGenerationError } from "./image-errors.ts";
 import { imageFailureMessages } from "../image-errors.ts";
-import { chatToolLabels, type ChatMessage, type ChatToolName } from "../chat.ts";
+import { chatToolLabels, type ChatMessage, type ChatToolName, type ChatToolStep } from "../chat.ts";
+import { partialToolResult } from "./partial-tool-result.ts";
+import { abortable, ChatToolError, createChatTask, sourceTimeoutMessage, toolTimeoutMs } from "./chat-task.ts";
 import { isValidPhoto } from "./image-input.ts";
 import { IMAGE_INPUT_ERROR, IMAGE_TYPES } from "../images.ts";
 import { DOCUMENT_INPUT_ERROR, DOCUMENT_TYPES, PDF_TYPE, XLSX_TYPE } from "../documents.ts";
@@ -26,8 +31,9 @@ import {
 
 const responseError =
   "Nie udało się uzyskać odpowiedzi. Sprawdź klucz, identyfikator modelu i środki w OpenRouter, a następnie spróbuj ponownie.";
+const chatStepLimit = 6;
 
-export async function chatResponse(request: Request, body: unknown) {
+export async function chatResponse(request: Request, body: unknown, startedAt = performance.now()) {
   let messages: ChatMessage[];
   const documents = new Map<string, ChatDocument>();
 
@@ -96,42 +102,100 @@ export async function chatResponse(request: Request, body: unknown) {
   }
 
   try {
-    const openrouter = createOpenRouter({ apiKey });
+    const task = createChatTask(request.signal, startedAt);
+    let searchDeadline: AbortSignal | undefined;
+    const openrouter = createOpenRouter({ apiKey, fetch: (url, options) => {
+      if (!searchDeadline) return fetch(url, options);
+      const signal = AbortSignal.any([searchDeadline, options?.signal ?? task.signal]);
+      return abortable(signal, () => fetch(url, { ...options, signal }));
+    } });
+    const chatModel = openrouter.chat(model!, { extraBody: { max_tool_calls: 1 } });
     const sheetLinks = googleIds(messages.flatMap(({ role, parts }) =>
       role === "user" ? parts.flatMap((part) => part.type === "text" ? [part.text] : []) : [],
     ));
-    const tools = {
+    const tools = task.limitTools({
       web_search: openrouter.tools.webSearch({ maxResults: 3, engine: "native" }),
       aktualnyCzas,
       generujObraz: createImageTool(apiKey!, request.signal),
       czytajPdf: createPdfTool(documents.get(PDF_TYPE)),
       arkusze: createSpreadsheetTool(request, documents.get(XLSX_TYPE), sheetLinks),
-    };
+      pogoda, waluty, swieta, wikipedia, kalkulator, czas,
+      oswiadczeniaZdrowotneUE,
+      notatki: createNotesTool(request),
+      diagnostyka: createDiagnosticsTool(chatModel.modelId, (): string[] => Object.keys(tools), chatStepLimit),
+    } satisfies Record<ChatToolName, unknown>);
     const usedTools: ChatToolName[] = [];
+    const toolSteps: ChatToolStep[] = [];
     const seenToolCalls = new Set<string>();
+    let stepNumber = 0;
     let webSearchInStep = false;
     let nativeSearchPending = false;
+
+    function recordToolUse(name: ChatToolName) {
+      usedTools.push(name);
+      const lastStep = toolSteps.at(-1);
+      if (lastStep?.step === stepNumber) lastStep.tools.push(name);
+      else toolSteps.push({ step: stepNumber, tools: [name] });
+    }
+
+    function toolMetadata() {
+      return { usedTools: [...usedTools], toolSteps: toolSteps.map(({ step, tools }) => ({ step, tools: [...tools] })), partialResults: [...observations] };
+    }
+
+    let modelCalls = 0;
     const modelResponses: Array<{ modelId: string | null }> = [];
-    const trackedModel = wrapLanguageModel({ model: openrouter(model!), middleware: {
+    const trackedModel = wrapLanguageModel({ model: chatModel, middleware: {
       specificationVersion: "v4",
-      wrapStream: async ({ doStream }) => {
+      wrapStream: async ({ doStream, params }) => {
+        modelCalls++;
         const metadata = { modelId: null as string | null };
         modelResponses.push(metadata);
+        // Wyszukiwanie natywne jest częścią odpowiedzi OpenRouter, a nie lokalnym execute().
+        const searchAllowed = params.toolChoice?.type !== "none" && params.tools?.some((tool) =>
+          tool.type === "provider" && tool.id === "openrouter.web_search");
+        searchDeadline = searchAllowed ? AbortSignal.timeout(toolTimeoutMs) : undefined;
+        let searches = 0;
         const response = await doStream();
         return { ...response, stream: response.stream.pipeThrough(new TransformStream({
           transform(part, controller) {
             // Odczyt przed uzupełnieniem brakujących metadanych przez AI SDK.
             if (part.type === "response-metadata" && part.modelId) metadata.modelId = part.modelId;
+            if (searchAllowed) {
+              const usage = part.type === "raw" ? (part.rawValue as { usage?: { server_tool_use?: { web_search_requests?: number } } } | null)?.usage : undefined;
+              const reported = usage?.server_tool_use?.web_search_requests ?? 0;
+              const isSearch = (part.type === "source" && part.sourceType === "url") ||
+                (part.type === "tool-call" && part.toolName === "web_search");
+              const observed = Math.max(isSearch ? 1 : 0, Number.isSafeInteger(reported) ? reported : 0);
+              if (observed > searches) {
+                task.recordSearch(observed - searches);
+                searches = observed;
+              }
+            }
+            if (part.type === "finish" && !searchDeadline?.aborted) searchDeadline = undefined;
             controller.enqueue(part);
           },
         })) };
       },
     } });
+    const instructions = `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`;
+    let summaryStep: number | undefined;
+    let hitStepLimit = false;
     const result = streamText({
       model: trackedModel,
       tools,
-      stopWhen: isStepCount(5),
-      instructions: `${assistantInstructions}\n\nBieżąca data (Europe/Warsaw): ${new Date().toLocaleDateString("pl-PL", { timeZone: "Europe/Warsaw" })}.`,
+      stopWhen: isStepCount(chatStepLimit),
+      instructions,
+      prepareStep: ({ stepNumber }) => {
+        hitStepLimit = stepNumber === chatStepLimit - 1;
+        if (!hitStepLimit && !task.failure && task.count() < task.toolLimit) return;
+        summaryStep = stepNumber + 1;
+        return {
+          toolChoice: "none",
+          activeTools: (Object.keys(tools) as ChatToolName[]).filter((name) => name !== "web_search"),
+          instructions: `${instructions}\n\nTo ostatni krok. Podsumuj w odpowiedzi zweryfikowane wyniki z dotychczasowych kroków ` +
+            "i jasno wskaż, czego nie udało się ustalić. Po błędzie nie ponawiaj wywołania. Komunikat końcowy dopisze aplikacja.",
+        };
+      },
       // Do modelu trafiają tekst, zdjęcia użytkownika i krótkie potwierdzenia obrazów.
       messages: await convertToModelMessages(messages.map(({ id, role, parts }) => ({
         id, role, parts: parts.flatMap((part): ChatMessage["parts"] => {
@@ -145,19 +209,55 @@ export async function chatResponse(request: Request, body: unknown) {
           return [];
         }),
       })), { tools }),
-      abortSignal: request.signal,
+      abortSignal: task.signal,
+      includeRawChunks: true,
+      toolCallConcurrency: 1,
       maxRetries: 0,
+      onStepEnd: ({ content }) => {
+        if (task.failure || summaryStep) return;
+        for (const part of content) {
+          if (part.type !== "tool-error" || !Object.hasOwn(chatToolLabels, part.toolName)) continue;
+          const name = part.toolName as ChatToolName;
+          task.recordFailure(name, name === "generujObraz" ? imageFailureMessages.input : "Narzędzie zwróciło błąd.");
+          break;
+        }
+      },
       // Szczegóły błędów dostawcy nie trafiają do przeglądarki ani logów.
       onError: () => {},
     });
 
-    let completedSteps = 0;
+    type ChatStreamPart = TextStreamPart<typeof tools>;
+    let startedSteps = 0;
     let hasText = false;
-    let interrupted = false;
+    let finalStepHasText = false;
+    let finalStepFailed = false;
+    let canceled = false;
+    let limitReported = false;
+    const observations = new Set<string>();
     const invalidImageCalls = new Set<string>();
-    const responseStream = result.stream.pipeThrough(new TransformStream<
-      TextStreamPart<typeof tools>, TextStreamPart<typeof tools>
-    >({
+
+    function reportStop(controller: TransformStreamDefaultController<ChatStreamPart>) {
+      if (limitReported || canceled || request.signal.aborted) return;
+      const messages = [
+        task.deadline.aborted && "Zatrzymałem się po 60 sekundach.",
+        !task.deadline.aborted && hitStepLimit && `Zatrzymałem się po ${chatStepLimit} krokach`,
+        task.count() >= task.toolLimit && `Zatrzymałem się po ${task.toolLimit} wywołaniach narzędzi.`,
+        task.failure && `Nie udało się wykonać narzędzia „${chatToolLabels[task.failure.name]}”. ${task.failure.message}`,
+        searchDeadline?.aborted && `Nie udało się uzyskać odpowiedzi z OpenRouter: ${sourceTimeoutMessage}.`,
+      ].filter(Boolean);
+      if (!messages.length) return;
+      limitReported = true;
+      const id = "agent-step-limit";
+      const needsFallback = finalStepFailed || !finalStepHasText;
+      const fallback = observations.size
+        ? `\n\nZebrane informacje:\n${[...observations].map((text) => `• ${text}`).join("\n")}`
+        : "\n\nNie udało się potwierdzić wyniku przed końcem zadania.";
+      controller.enqueue({ type: "text-start", id });
+      controller.enqueue({ type: "text-delta", id, text: `${hasText ? "\n\n" : ""}${messages.join("\n")}${needsFallback ? fallback : ""}` });
+      controller.enqueue({ type: "text-end", id });
+    }
+
+    const responseStream = result.stream.pipeThrough(new TransformStream<ChatStreamPart, ChatStreamPart>({
       transform(part, controller) {
         if (part.type === "tool-call" && part.invalid && part.toolName === "generujObraz") {
           invalidImageCalls.add(part.toolCallId);
@@ -168,18 +268,51 @@ export async function chatResponse(request: Request, body: unknown) {
           controller.enqueue({ ...part, error: new ImageGenerationError("input") });
           return;
         }
-        if (part.type === "finish-step") completedSteps++;
-        if (part.type === "text-delta" && part.text.trim()) hasText = true;
-        if (part.type === "abort" || part.type === "error") interrupted = true;
-        // Zakończenie narzędziami na piątym kroku oznacza brak miejsca na dalszą odpowiedź.
-        // Odpowiedź ukończona naturalnie w piątym kroku nie wymaga tego komunikatu.
-        if (part.type === "finish" && part.finishReason === "tool-calls" && completedSteps >= 5 && !interrupted) {
-          const id = "agent-step-limit";
-          controller.enqueue({ type: "text-start", id });
-          controller.enqueue({ type: "text-delta", id, text: `${hasText ? "\n\n" : ""}Przerwałem po 5 krokach` });
-          controller.enqueue({ type: "text-end", id });
+        if (part.type === "start-step") startedSteps++;
+        if (part.type === "text-delta" && part.text.trim()) {
+          hasText = true;
+          if (startedSteps === summaryStep) finalStepHasText = true;
         }
+        if (part.type === "abort") {
+          canceled = request.signal.aborted;
+          finalStepFailed = true;
+          reportStop(controller);
+        }
+        if (part.type === "error" && (summaryStep || task.deadline.aborted || searchDeadline?.aborted)) {
+          // Błąd podsumowania nie powinien zastąpić wyników z poprzednich kroków.
+          finalStepFailed = true;
+          return;
+        }
+        if (part.type === "tool-result" && !part.dynamic && !part.preliminary && observations.size < 8) {
+          const observation = partialToolResult(part.toolName, part.output);
+          if (observation && observation !== task.failure?.message) {
+            observations.add(observation.length > 360 ? `${observation.slice(0, 359)}…` : observation);
+          }
+        }
+        if (part.type === "source" && part.sourceType === "url" && observations.size < 8) {
+          observations.add("Odnalezione odnośniki są w źródłach odpowiedzi.");
+        }
+        if (part.type === "finish") reportStop(controller);
         controller.enqueue(part);
+        if (part.type === "tool-result" && !part.dynamic && part.toolName === "wikipedia" && "url" in part.output) {
+          controller.enqueue({
+            type: "source", sourceType: "url", id: `wikipedia-${part.toolCallId}`,
+            title: `${part.output.tytul} — Wikipedia`, url: part.output.url,
+            providerMetadata: { laba: { toolRetrievedAt: part.output.pobrano } },
+          });
+        }
+        if (part.type === "tool-result" && !part.dynamic && part.toolName === "oswiadczeniaZdrowotneUE" && "wyniki" in part.output) {
+          for (const { id, skladnik, url } of part.output.wyniki) {
+            controller.enqueue({
+              type: "source", sourceType: "url", id: `${part.toolCallId}-${id}`,
+              title: `${skladnik} — ${id}`, url,
+              providerMetadata: { laba: { toolRetrievedAt: part.output.pobrano } },
+            });
+          }
+        }
+      },
+      flush(controller) {
+        reportStop(controller);
       },
     }));
 
@@ -193,20 +326,29 @@ export async function chatResponse(request: Request, body: unknown) {
         sendSources: true,
         messageMetadata: ({ part }) => {
           if (part.type === "start-step") {
+            stepNumber++;
             webSearchInStep = false;
             nativeSearchPending = false;
           }
           if (part.type === "finish-step") return { modelId: modelResponses.shift()?.modelId ?? null, vision };
+          if (part.type === "finish" || part.type === "abort" || (part.type === "text-end" && part.id === "agent-step-limit")) {
+            return { statistics: { steps: modelCalls,
+              toolCalls: task.count(), elapsedMs: task.elapsedMs() } };
+          }
           if (part.type === "source" && part.sourceType === "url") {
+            const toolRetrievedAt = part.providerMetadata?.laba?.toolRetrievedAt;
+            if (typeof toolRetrievedAt === "string") return { retrievedAt: toolRetrievedAt };
             // Natywne wyszukiwanie może zwrócić źródła bez jawnego tool-call.
             if (!webSearchInStep) {
-              usedTools.push("web_search");
+              recordToolUse("web_search");
               webSearchInStep = true;
               nativeSearchPending = true;
             }
-            return { retrievedAt: new Date().toISOString(), usedTools: [...usedTools] };
+            return { retrievedAt: new Date().toISOString(), ...toolMetadata() };
           }
-          if (part.type === "tool-call" && !part.invalid && Object.hasOwn(chatToolLabels, part.toolName)) {
+          const nativeCall = part.type === "tool-call" && !part.invalid && part.toolName === "web_search";
+          const localCall = (part.type === "tool-result" || part.type === "tool-error") && task.executed.has(part.toolCallId);
+          if ((nativeCall || localCall) && Object.hasOwn(chatToolLabels, part.toolName)) {
             const name = part.toolName as ChatToolName;
             if (seenToolCalls.has(part.toolCallId)) return;
             seenToolCalls.add(part.toolCallId);
@@ -214,13 +356,14 @@ export async function chatResponse(request: Request, body: unknown) {
             if (part.toolName === "web_search" && nativeSearchPending) {
               nativeSearchPending = false;
             } else {
-              usedTools.push(name);
+              recordToolUse(name);
             }
             if (part.toolName === "web_search") webSearchInStep = true;
-            return { usedTools: [...usedTools] };
+            return toolMetadata();
           }
         },
         onError: (error) => {
+          if (error instanceof ChatToolError) return error.message;
           if (error instanceof ImageGenerationError) return error.message;
           if (InvalidToolInputError.isInstance(error) && error.toolName === "generujObraz") return imageFailureMessages.input;
           return currentResponseError;

@@ -2,6 +2,7 @@ import { generateImage, jsonSchema, tool } from "ai";
 import { imageModelWithResponseMetadata } from "./image-model.ts";
 import type { GeneratedImage } from "../images.ts";
 import { classifyImageError, ImageGenerationError } from "./image-errors.ts";
+import { toolTimeoutMs } from "./chat-task.ts";
 
 export function validateImagePrompt(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value) &&
@@ -15,7 +16,7 @@ export function validateImagePrompt(value: unknown) {
 export async function generatePicture({ apiKey, prompt, signal }: {
   apiKey: string; prompt: string; signal: AbortSignal;
 }): Promise<GeneratedImage> {
-  const timeout = AbortSignal.timeout(110_000);
+  const timeout = AbortSignal.timeout(toolTimeoutMs);
   const startedAt = Date.now();
   try {
     const imageModel = imageModelWithResponseMetadata(apiKey);

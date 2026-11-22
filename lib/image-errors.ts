@@ -9,7 +9,7 @@ export const imageFailureMessages = {
   refused: "Model odmówił wygenerowania tego obrazu. Zmień opis i spróbuj ponownie.",
   empty: "Model odpowiedział, ale nie zwrócił obrazu. Spróbuj ponownie lub doprecyzuj opis.",
   format: "Model zwrócił obraz w nieobsługiwanym formacie. Spróbuj ponownie.",
-  timeout: "Generowanie obrazu przekroczyło limit czasu. Spróbuj ponownie z prostszym opisem.",
+  timeout: "źródło nie odpowiada",
   cancelled: "Generowanie obrazu zostało przerwane.",
   unknown: "Nie udało się wygenerować obrazu. Spróbuj ponownie później.",
 } as const;

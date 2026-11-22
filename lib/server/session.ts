@@ -69,6 +69,12 @@ export function hasRequestSession(request: Request) {
   return verifySession(requestSessionToken(request));
 }
 
+export function requestSessionKey(request: Request) {
+  const token = requestSessionToken(request);
+  if (!token || !verifySession(token)) return null;
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export function signSheetConfirmation(request: Request, payload: string) {
   const config = configuration();
   const session = requestSessionToken(request);

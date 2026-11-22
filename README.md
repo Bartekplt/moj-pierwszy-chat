@@ -5,8 +5,8 @@
 `POST /api/agent` najpierw sprawdza sesję i Origin, następnie odczytuje pole `mode`:
 
 - `{"mode":"chat","messages":[...]}` — rozmowa strumieniowana przez `streamText`,
-  z narzędziami `web_search`, `aktualnyCzas`, `generujObraz`, `czytajPdf` i `arkusze`.
-  Limit to `isStepCount(5)`. Zdjęcia i dokumenty są częściami `file`.
+  z narzędziami wyszukiwania, czasu, obrazów, dokumentów i codziennej pracy.
+  Limit to `isStepCount(6)`. Zdjęcia i dokumenty są częściami `file`.
 - `{"mode":"analyze","message":"treść wiadomości klienta"}` — kompletny wynik JSON,
   generowany przez `generateText` z `Output.object` i walidowany po stronie serwera.
 - `{"mode":"sheet-write","confirmation":"…"}` — zapis w Google Sheets po zatwierdzeniu
@@ -29,12 +29,18 @@ komunikat błędu nie pozostaje obok gotowego obrazu.
 
 Stare endpointy rozmowy, analizy i obrazu zostały usunięte po sprawdzeniu obu trybów.
 
-Nad odpowiedzią pojawiają się numerowane etykiety narzędzi w kolejności użycia,
-także przy ponownym użyciu tego samego narzędzia. Źródła jednego wyszukiwania
-nie tworzą dodatkowych etykiet. Jeśli agent wyczerpie pięć kroków i nadal próbuje
-kontynuować pracę z narzędziami, strumień dopisuje „Przerwałem po 5 krokach”.
-Normalne ukończenie odpowiedzi w piątym kroku nie jest oznaczane jako przerwanie.
-Przy zadaniu złożonym instrukcja nakazuje najpierw zebrać informacje, potem tworzyć.
+Nad odpowiedzią widać narzędzia w kolejności użycia, z numerami kroków modelu.
+Narzędzia użyte w tym samym kroku mają wspólny numer. Źródła jednego wyszukiwania
+nie tworzą dodatkowych etykiet. Szósty krok służy wyłącznie do podsumowania.
+Czat dopisuje „Zatrzymałem się po 6 krokach” i w razie braku podsumowania pokazuje
+krótki przegląd zebranych wyników. Przy zadaniu złożonym agent ma przeczytać wynik
+narzędzia przed wyborem kolejnego kroku.
+
+Jedno zadanie w czacie może wykonać do 16 wywołań narzędzi i trwa do 60 sekund.
+Na narzędzie przypada do 10 sekund. Wyszukiwanie natywne odbywa się podczas
+żądania OpenRouter, więc dla żądań z tym narzędziem obowiązuje limit 10 sekund
+na całe żądanie. Po błędzie czat pokazuje przyczynę i zebrane ustalenia.
+Pod odpowiedzią widać liczbę kroków modelu, wywołań i czas w sekundach.
 
 ## Asystent do codziennej pracy
 
@@ -42,6 +48,21 @@ Zwykły czat pomaga w codziennej pracy i odpowiada też na pytania ogólne. W pr
 nad sklepem z suplementami dla ludzi i zwierząt porównuje oferty, liczy marżę na
 podstawie podanych danych, pisze teksty i wyszukuje dostawców z linkami do źródeł.
 Do grafiki można użyć własnego opisu albo jednej z trzech podpowiedzi pod czatem.
+
+### Narzędzia codzienne
+
+- `pogoda` — prognoza dla miasta i wybranego dnia z [Open-Meteo](https://open-meteo.com/en/docs).
+- `waluty` — ostatni średni kurs [NBP](https://api.nbp.pl/) i przeliczenie w obie strony względem PLN.
+- `swieta` — krajowe i regionalne dni wolne w podanym kraju i roku z [Nager.Date](https://github.com/nager/Nager.Date/blob/main/doc/examples/rest-api.md).
+- `wikipedia` — krótki wstęp z polskiej Wikipedii. Link do artykułu pojawia się w źródłach czatu.
+- `kalkulator` — dodawanie, odejmowanie, mnożenie lub dzielenie dwóch osobno podanych liczb.
+- `czas` — aktualny czas w wybranej strefie IANA. `aktualnyCzas` nadal podaje czas w Polsce.
+- `notatki` — do 20 notatek na sesję, każda do 500 znaków. Są w pamięci instancji serwera i znikają po jej restarcie.
+- `diagnostyka` — nazwa modelu rozmowy, narzędzia, limit kroków i informacja tak/nie o wymaganych zmiennych.
+- `oswiadczeniaZdrowotneUE` — wyszukuje po składniku oświadczenia dla żywności i suplementów dla ludzi w [rejestrze Komisji Europejskiej](https://food.ec.europa.eu/food-safety/labelling-and-nutrition/nutrition-and-health-claims/eu-register-health-claims_en). Zwraca status, warunki i ograniczenia wpisu, a czat pokazuje link do źródła.
+
+Przykłady w zwykłym czacie: „Jaka dziś pogoda w Poznaniu?”, „Ile złotych to 25 EUR według NBP?”,
+„Streść hasło Warszawa z Wikipedii”, „Zapisz notatkę: sprawdzić zapasy”, „Pokaż moje notatki”.
 
 ## PDF i arkusze
 

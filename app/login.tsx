@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import ThemeSwitch from "./theme-switch";
 
 export default function Login({ configurationError = "" }: { configurationError?: string }) {
   const [password, setPassword] = useState("");
@@ -34,10 +35,20 @@ export default function Login({ configurationError = "" }: { configurationError?
 
   return (
     <main className="login">
-      <h1>Wpisz hasło</h1>
-      <form onSubmit={login}>
+      <header className="login-header">
+        <div className="brand">
+          <span className="chat-mark" aria-hidden="true" />
+          <div>
+            <h1>Mój chatbot</h1>
+            <p>Asystent do codziennej pracy w e-commerce.</p>
+          </div>
+        </div>
+        <ThemeSwitch />
+      </header>
+      <form className="login-form" onSubmit={login}>
+        <h2>Wpisz hasło</h2>
         <label htmlFor="password">Hasło warsztatowe</label>
-        <div className="composer">
+        <div className="login-fields">
           <input
             id="password"
             name="password"
